@@ -16,7 +16,6 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Only show errors
 def calculate_eow_price(ticker):
     data = yf.download(ticker, start='2022-01-01', progress=False)
     data = data[['Close']]
-
     dataset = data.values
 
     scaler = MinMaxScaler(feature_range=(0, 1))
@@ -179,11 +178,11 @@ def sell_option(data):
         return True
     return False
 
-def create_pdf(good_buys, predicted, ticker, stock_info, pdf):
+def create_pdf(good_buys, predicted, close, ticker, stock_info, pdf):
     pdf.add_page()
     pdf.set_font("Arial", size=12)
 
-    pdf.cell(200, 10, txt=f"{ticker}: {stock_info.get('shortName')}, Predicted Price: ${predicted}", ln=True, align='C')
+    pdf.cell(200, 10, txt=f"{ticker}: {stock_info.get('shortName')}, Current Price: ${close}, Predicted Price: ${predicted}", ln=True, align='C')
     pdf.cell(200, 10, txt=f"Call or Put? {option_type}", ln=True, align='C')
 
     pdf.cell(200, 10, txt="Good Buy Weekly Options:", ln=True, align='L')
@@ -232,9 +231,9 @@ if __name__ == "__main__":
             good_buys = results[results['type'] == option_type]
             good_buys = good_buys[good_buys['goodBuy']]
 
-            create_pdf(good_buys, predicted, ticker, stock.info, pdf)
+            create_pdf(good_buys, predicted, round(data[['Close']].iloc[-1].Close,2), ticker, stock.info, pdf)
 
-    pdf.output(r'C:\Users\pawc3\Desktop\sp500_options_analysis.pdf')
+    pdf.output(r'D:\Stocks\sp500_options_analysis.pdf')
 
     print('Done')
 
