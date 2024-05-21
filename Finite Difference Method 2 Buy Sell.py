@@ -37,8 +37,11 @@ def calculate_eow_price(ticker):
     model.compile(optimizer='adam', loss='mean_squared_error')
     model.fit(X, y, epochs=25, batch_size=32, verbose = 0)
 
+    today = datetime.today()
+    days_until_friday = (4 - today.weekday() + 7) % 7
+
     num_simulations = 1000
-    num_days = 5
+    num_days = days_until_friday
 
     last_60_days = scaled_data[-lookback:]
     X_test = []
@@ -67,9 +70,9 @@ def calculate_eow_price(ticker):
 
     simulated_prices = np.array(simulated_prices)
 
-    average_end_of_week_price = np.mean(simulated_prices[:, -1])
+    average_end_of_week_price = round(np.mean(simulated_prices[:, -1]), 2)
 
-    return round(average_end_of_week_price, 2)
+    return average_end_of_week_price
 
 
 def calculate_moving_averages(data, short_window, long_window):
@@ -207,9 +210,11 @@ if __name__ == "__main__":
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
 
+    if not os.path.exists(fr'D:\Stocks\{datetime.now().year}\{datetime.now().month}\{datetime.now().day}'):
+        os.makedirs(fr'D:\Stocks\{datetime.now().year}\{datetime.now().month}\{datetime.now().day}')
+
     for ticker in tqdm(symbols, total=len(symbols), desc="Analyzing Stocks"):
-        if ticker in ['BRK.B','BF.B']:
-            continue
+        ticker = ticker.replace('.', '-')
         stock = yf.Ticker(ticker)
         data = yf.download(ticker, start='2022-01-01', progress=False)
         data = calculate_moving_averages(data, short_window=10, long_window=50)
@@ -233,7 +238,7 @@ if __name__ == "__main__":
 
             create_pdf(good_buys, predicted, round(data[['Close']].iloc[-1].Close,2), ticker, stock.info, pdf)
 
-    pdf.output(r'D:\Stocks\sp500_options_analysis.pdf')
+    pdf.output(fr'D:\Stocks\{datetime.now().year}\{datetime.now().month}\{datetime.now().day}\sp500_options_analysis.pdf')
 
     print('Done')
 
