@@ -1,41 +1,58 @@
-from tqdm import tqdm
-from bs4 import BeautifulSoup
 import requests
-from datetime import datetime, timedelta
-from fpdf import FPDF
+import yfinance as yf
 import numpy as np
 import pandas as pd
+from bs4 import BeautifulSoup
+from fpdf import FPDF
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
-import yfinance as yf
+from datetime import datetime, timedelta
+from tqdm import tqdm
+import ta  # Technical Analysis library
+import warnings
 import os
-
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Only show errors
+warnings.filterwarnings("ignore")
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 
 def calculate_eow_price(ticker):
     data = yf.download(ticker, start='2022-01-01', progress=False)
-    data = data[['Close']]
-    dataset = data.values
+    data = data[['Close']].copy()  # Use .copy() to avoid SettingWithCopyWarning
 
+    # Adding technical indicators
+    data.loc[:, 'SMA'] = ta.trend.sma_indicator(data['Close'], window=14)
+    data.loc[:, 'EMA'] = ta.trend.ema_indicator(data['Close'], window=14)
+    data.loc[:, 'RSI'] = ta.momentum.rsi(data['Close'], window=14)
+
+    # Fill NaN values
+    data = data.bfill()  # Use bfill instead of fillna with method
+
+    # Scale the data
     scaler = MinMaxScaler(feature_range=(0, 1))
-    scaled_data = scaler.fit_transform(dataset)
-    lookback = 60
+    scaled_data = scaler.fit_transform(data)
 
+    lookback = 60
     X, y = [], []
     for i in range(lookback, len(scaled_data)):
-        X.append(scaled_data[i - lookback:i, 0])
+        X.append(scaled_data[i - lookback:i])
         y.append(scaled_data[i, 0])
 
     X, y = np.array(X), np.array(y)
-    X = np.reshape(X, (X.shape[0], X.shape[1], 1))
 
+    # Model creation
     model = Sequential()
-    model.add(LSTM(units=50, return_sequences=True, input_shape=(X.shape[1], 1)))
+    model.add(Input(shape=(X.shape[1], X.shape[2])))
+    model.add(LSTM(units=50, return_sequences=True))
+    model.add(Dropout(0.2))
+    model.add(LSTM(units=50, return_sequences=True))
+    model.add(Dropout(0.2))
     model.add(LSTM(units=50))
+    model.add(Dropout(0.2))
     model.add(Dense(units=1))
     model.compile(optimizer='adam', loss='mean_squared_error')
-    model.fit(X, y, epochs=25, batch_size=32, verbose = 0)
+
+    model.fit(X, y, epochs=25, batch_size=32, verbose=0)
 
     today = datetime.today()
     days_until_friday = (4 - today.weekday() + 7) % 7
@@ -47,7 +64,7 @@ def calculate_eow_price(ticker):
     X_test = []
     X_test.append(last_60_days)
     X_test = np.array(X_test)
-    X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
+    X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], X_test.shape[2]))
 
     simulated_prices = []
     for _ in tqdm(range(num_simulations), desc="Predicting Price", leave=False):
@@ -56,15 +73,17 @@ def calculate_eow_price(ticker):
 
         for _ in range(num_days):
             predicted_price = model.predict(X_temp, verbose=0)
-            predicted_price = scaler.inverse_transform(predicted_price)
+            predicted_price = scaler.inverse_transform(
+                np.concatenate((predicted_price, X_temp[0, -1, 1:].reshape(1, -1)), axis=1))[:, 0]
 
-            simulation.append(predicted_price[0][0])
+            simulation.append(predicted_price[0])
 
-            new_test_data = np.append(X_temp[0][1:], scaler.transform(predicted_price), axis=0)
+            new_test_data = np.append(X_temp[0, 1:], scaler.transform(
+                np.concatenate((predicted_price.reshape(1, -1), X_temp[0, -1, 1:].reshape(1, -1)), axis=1)), axis=0)
             X_temp = []
             X_temp.append(new_test_data)
             X_temp = np.array(X_temp)
-            X_temp = np.reshape(X_temp, (X_temp.shape[0], X_temp.shape[1], 1))
+            X_temp = np.reshape(X_temp, (X_temp.shape[0], X_temp.shape[1], X_temp.shape[2]))
 
         simulated_prices.append(simulation)
 
@@ -171,28 +190,33 @@ def analyze_options(options, S, r, sigma, steps, simulations):
         })
     return pd.DataFrame(results)
 
-def buy_option(data):
+def buy_option(ticker):
+    data = yf.download(ticker, start='2022-01-01', progress=False)
+    data = calculate_moving_averages(data, short_window=10, long_window=50)
     if data['Short_MA'].iloc[-1] > data['Long_MA'].iloc[-1] and data['Short_MA'].iloc[-2] <= data['Long_MA'].iloc[-2]:
         return True
-    return False
-
-def sell_option(data):
     if data['Short_MA'].iloc[-1] < data['Long_MA'].iloc[-1] and data['Short_MA'].iloc[-2] >= data['Long_MA'].iloc[-2]:
         return True
     return False
 
-def create_pdf(good_buys, predicted, close, ticker, stock_info, pdf):
+def create_pdf(good_buys, predicted, news, close, ticker, stock_info, pdf):
     pdf.add_page()
     pdf.set_font("Arial", size=12)
 
     pdf.cell(200, 10, txt=f"{ticker}: {stock_info.get('shortName')}, Current Price: ${close}, Predicted Price: ${predicted}", ln=True, align='C')
     pdf.cell(200, 10, txt=f"Call or Put? {option_type}", ln=True, align='C')
 
+    pdf.set_font("Arial", size=10)
+    count = 0
+    for new in news:
+        if count == 5: continue
+        pdf.cell(200, 10, txt=new.get('title'), ln=True, align='L')
+
     pdf.cell(200, 10, txt="Good Buy Weekly Options:", ln=True, align='L')
     if not good_buys.empty:
-        pdf.set_font("Arial", size=10)
         for index, option in good_buys.iterrows():
-            pdf.cell(200, 10, txt=f"Strike: {option['strike']}, Expiration: {option['expirationDate']}, Market Price: {option['marketPrice']}, Simulated Price: {option['simulatedPrice']}, Diff: {round(((option['simulatedPrice'] - option['marketPrice']) / option['simulatedPrice']) * 100)}", ln=True, align='L')
+            if option['marketPrice'] <= 10:
+                pdf.cell(200, 10, txt=f"Strike: {option['strike']}, Expiration: {option['expirationDate']}, Market Price: {option['marketPrice']}, Simulated Price: {option['simulatedPrice']}, Diff: {round(((option['simulatedPrice'] - option['marketPrice']) / option['simulatedPrice']) * 100)}", ln=True, align='L')
     else:
         pdf.cell(200, 10, txt="No good buy options found.", ln=True, align='L')
 
@@ -206,7 +230,7 @@ if __name__ == "__main__":
 
     df = pd.read_html(str(table))[0]
 
-    symbols = df['Symbol'].tolist()
+    symbols = sorted(df['Symbol'].tolist())
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
 
@@ -216,32 +240,24 @@ if __name__ == "__main__":
     for ticker in tqdm(symbols, total=len(symbols), desc="Analyzing Stocks"):
         ticker = ticker.replace('.', '-')
         stock = yf.Ticker(ticker)
-        data = yf.download(ticker, start='2022-01-01', progress=False)
-        data = calculate_moving_averages(data, short_window=10, long_window=50)
-        if not(buy_option(data)) and not(sell_option(data)):
+        if not(buy_option(ticker)):
             continue
-        option_type = calculate_buying_decision(data)
         options = fetch_option_data(ticker)
         weekly_options = filter_weekly_options(options)
-        if len(weekly_options) != 0:
-            predicted = calculate_eow_price(ticker)
-            S = stock.history(period='1d')['Close'].iloc[-1]
-            r = get_risk_free_rate()
-            sigma = calculate_historical_volatility(ticker)
-            steps = 1000
-            simulations = 10000
+        if weekly_options.empty:
+            continue
+        predicted = calculate_eow_price(ticker)
+        option_type = 'call' if predicted > stock.history(period='1d')['Close'].iloc[-1] else 'put'
+        S = stock.history(period='1d')['Close'].iloc[-1]
+        r = get_risk_free_rate()
+        sigma = calculate_historical_volatility(ticker)
+        results = analyze_options(weekly_options, S, r, sigma, 1000, 10000)
 
-            results = analyze_options(weekly_options, S, r, sigma, steps, simulations)
+        good_buys = results[results['type'] == option_type]
+        good_buys = good_buys[good_buys['goodBuy']]
 
-            good_buys = results[results['type'] == option_type]
-            good_buys = good_buys[good_buys['goodBuy']]
-
-            create_pdf(good_buys, predicted, round(data[['Close']].iloc[-1].Close,2), ticker, stock.info, pdf)
+        create_pdf(good_buys, predicted, stock.news, S, ticker, stock.info, pdf)
 
     pdf.output(fr'D:\Stocks\{datetime.now().year}\{datetime.now().month}\{datetime.now().day}\sp500_options_analysis.pdf')
 
     print('Done')
-
-
-
-
