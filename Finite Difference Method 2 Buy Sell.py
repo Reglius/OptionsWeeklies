@@ -93,7 +93,6 @@ def calculate_eow_price(ticker):
 
     return average_end_of_week_price
 
-
 def calculate_moving_averages(data, short_window, long_window):
     data['Short_MA'] = data['Adj Close'].rolling(window=short_window, min_periods=1).mean()
     data['Long_MA'] = data['Adj Close'].rolling(window=long_window, min_periods=1).mean()
@@ -146,7 +145,7 @@ def calculate_historical_volatility(ticker, period='1y'):
     volatility = log_returns.std() * np.sqrt(252)
     return volatility
 
-def monte_carlo_simulation(S, K, T, r, sigma, steps, simulations, option_type):
+def monte_carlo_simulation(S, K, T, r, sigma, steps, simulations, option_type, eow_price):
     dt = T / steps
     price_paths = np.zeros((steps + 1, simulations))
     price_paths[0] = S
@@ -154,6 +153,8 @@ def monte_carlo_simulation(S, K, T, r, sigma, steps, simulations, option_type):
     for t in range(1, steps + 1):
         z = np.random.standard_normal(simulations)
         price_paths[t] = price_paths[t - 1] * np.exp((r - 0.5 * sigma ** 2) * dt + sigma * np.sqrt(dt) * z)
+
+    price_paths[-1] = eow_price  # Use the predicted end-of-week price for the last step
 
     if option_type == 'call':
         payoff = np.maximum(price_paths[-1] - K, 0)
@@ -171,14 +172,14 @@ def next_friday():
     next_friday_date = today + timedelta(days=days_until_friday)
     return next_friday_date
 
-def analyze_options(options, S, r, sigma, steps, simulations):
+def analyze_options(options, S, r, sigma, steps, simulations, eow_price):
     results = []
     for index, row in tqdm(options.iterrows(), total=options.shape[0], desc="Analyzing options", leave=False):
         K = row['strike']
         T = (next_friday() - pd.Timestamp.today()).days / 365.0
         option_type = row['type']
         market_price = row['lastPrice']
-        simulated_price = monte_carlo_simulation(S, K, T, r, sigma, steps, simulations, option_type)
+        simulated_price = monte_carlo_simulation(S, K, T, r, sigma, steps, simulations, option_type, eow_price)
         good_buy = simulated_price > market_price
         results.append({
             'type': option_type,
@@ -227,10 +228,9 @@ if __name__ == "__main__":
     response = requests.get(url)
     soup = BeautifulSoup(response.content, 'html.parser')
     table = soup.find('table', {'id': 'constituents'})
-
     df = pd.read_html(str(table))[0]
-
     symbols = sorted(df['Symbol'].tolist())
+
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
 
@@ -251,7 +251,7 @@ if __name__ == "__main__":
         S = stock.history(period='1d')['Close'].iloc[-1]
         r = get_risk_free_rate()
         sigma = calculate_historical_volatility(ticker)
-        results = analyze_options(weekly_options, S, r, sigma, 1000, 10000)
+        results = analyze_options(weekly_options, S, r, sigma, 1000, 10000, predicted)
 
         good_buys = results[results['type'] == option_type]
         good_buys = good_buys[good_buys['goodBuy']]
