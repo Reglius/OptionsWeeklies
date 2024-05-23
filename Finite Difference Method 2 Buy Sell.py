@@ -8,18 +8,18 @@ from sklearn.preprocessing import MinMaxScaler
 from datetime import datetime, timedelta
 from tqdm import tqdm
 import re
-import ta  # Technical Analysis library
+import ta
 import warnings
 import os
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Only show errors
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 warnings.filterwarnings("ignore")
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 
-def calculate_eow_price(ticker):
+def calculate_eod_price(ticker):
     data = yf.download(ticker, start='2022-01-01', progress=False)
-    data = data[['Close']].copy()  # Use .copy() to avoid SettingWithCopyWarning
+    data = data[['Close']].copy()
 
     # Adding technical indicators
     data.loc[:, 'SMA'] = ta.trend.sma_indicator(data['Close'], window=14)
@@ -143,7 +143,7 @@ def calculate_historical_volatility(ticker, period='1y'):
     volatility = log_returns.std() * np.sqrt(252)
     return volatility
 
-def monte_carlo_simulation(S, K, T, r, sigma, steps, simulations, option_type, eow_price):
+def monte_carlo_simulation(S, K, T, r, sigma, steps, simulations, option_type, pred_price):
     dt = T / steps
     price_paths = np.zeros((steps + 1, simulations))
     price_paths[0] = S
@@ -152,7 +152,7 @@ def monte_carlo_simulation(S, K, T, r, sigma, steps, simulations, option_type, e
         z = np.random.standard_normal(simulations)
         price_paths[t] = price_paths[t - 1] * np.exp((r - 0.5 * sigma ** 2) * dt + sigma * np.sqrt(dt) * z)
 
-    price_paths[-1] = eow_price  # Use the predicted end-of-week price for the last step
+    price_paths[-1] = pred_price  # Use the predicted end-of-week price for the last step
 
     if option_type == 'call':
         payoff = np.maximum(price_paths[-1] - K, 0)
@@ -170,14 +170,14 @@ def next_friday():
     next_friday_date = today + timedelta(days=days_until_friday)
     return next_friday_date
 
-def analyze_options(options, S, r, sigma, steps, simulations, eow_price):
+def analyze_options(options, S, r, sigma, steps, simulations, pred_price):
     results = []
     for index, row in tqdm(options.iterrows(), total=options.shape[0], desc="Analyzing options", leave=False):
         K = row['strike']
         T = (next_friday() - pd.Timestamp.today()).days / 365.0
         option_type = row['type']
         market_price = row['lastPrice']
-        simulated_price = monte_carlo_simulation(S, K, T, r, sigma, steps, simulations, option_type, eow_price)
+        simulated_price = round(monte_carlo_simulation(S, K, T, r, sigma, steps, simulations, option_type, pred_price), 2)
         good_buy = simulated_price > market_price
         results.append({
             'type': option_type,
@@ -202,14 +202,14 @@ def create_pdf(good_buys, predicted, news, close, ticker, stock_info, pdf):
     pdf.add_page()
     pdf.set_font("Arial", size=12)
 
-    pdf.cell(200, 10, txt=f"{ticker}: {stock_info.get('shortName')}, Current Price: ${close}, Predicted Price: ${predicted}", ln=True, align='C')
+    pdf.cell(200, 10, txt=f"{ticker}: {stock_info.get('shortName')}, Current Price: ${round(close, 2)}, Predicted Price: ${predicted}", ln=True, align='C')
     pdf.cell(200, 10, txt=f"Call or Put? {option_type}", ln=True, align='C')
 
     pdf.set_font("Arial", size=10)
     count = 0
     for new in news:
         if count == 5: continue
-        pdf.cell(200, 10, txt=re.sub(r'/^[\w\-\s]+$/', '', new.get('title')), ln=True, align='L')
+        pdf.cell(200, 10, txt=re.sub(r'[^A-Za-z\s]', '', new.get('title')), ln=True, align='L')
 
     pdf.cell(200, 10, txt="Good Buy Weekly Options:", ln=True, align='L')
     if not good_buys.empty:
@@ -235,26 +235,33 @@ if __name__ == "__main__":
     if not os.path.exists(fr'D:\Stocks\{datetime.now().year}\{datetime.now().month}\{datetime.now().day}'):
         os.makedirs(fr'D:\Stocks\{datetime.now().year}\{datetime.now().month}\{datetime.now().day}')
 
-    for ticker in tqdm(symbols, total=len(symbols), desc="Analyzing Stocks"):
-        ticker = ticker.replace('.', '-')
-        stock = yf.Ticker(ticker)
-        if not(buy_option(ticker)):
-            continue
-        options = fetch_option_data(ticker)
-        weekly_options = filter_weekly_options(options)
-        if weekly_options.empty:
-            continue
-        predicted = calculate_eow_price(ticker)
-        option_type = 'call' if predicted > stock.history(period='1d')['Close'].iloc[-1] else 'put'
-        S = stock.history(period='1d')['Close'].iloc[-1]
-        r = get_risk_free_rate()
-        sigma = calculate_historical_volatility(ticker)
-        results = analyze_options(weekly_options, S, r, sigma, 1000, 10000, predicted)
+    for ticker in tqdm(symbols, total=len(symbols), desc="Analyzing Stock"):
+        while True:
+            try:
+                ticker = ticker.replace('.', '-')
+                stock = yf.Ticker(ticker)
+                if not (buy_option(ticker)):
+                    break
+                options = fetch_option_data(ticker)
+                weekly_options = filter_weekly_options(options)
+                if weekly_options.empty:
+                    break
+                predicted = calculate_eod_price(ticker)
+                option_type = 'call' if predicted > stock.history(period='1d')['Close'].iloc[-1] else 'put'
+                S = stock.history(period='1d')['Close'].iloc[-1]
+                r = get_risk_free_rate()
+                sigma = calculate_historical_volatility(ticker)
+                results = analyze_options(weekly_options, S, r, sigma, 1000, 10000, predicted)
 
-        good_buys = results[results['type'] == option_type]
-        good_buys = good_buys[good_buys['goodBuy']]
+                good_buys = results[results['type'] == option_type]
+                good_buys = good_buys[good_buys['goodBuy']]
 
-        create_pdf(good_buys, predicted, stock.news, S, ticker, stock.info, pdf)
+                create_pdf(good_buys, predicted, stock.news, S, ticker, stock.info, pdf)
+            except Exception:
+                print(f'Error with {ticker}')
+                continue
+            else:
+                break
 
     today = datetime.now()
     pdf.output(f'D:\\Stocks\\{today.year}\\{today.month}\\{today.day}\\sp500_options_analysis.pdf')
