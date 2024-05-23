@@ -7,6 +7,7 @@ from fpdf import FPDF
 from sklearn.preprocessing import MinMaxScaler
 from datetime import datetime, timedelta
 from tqdm import tqdm
+import re
 import ta  # Technical Analysis library
 import warnings
 import os
@@ -54,11 +55,8 @@ def calculate_eow_price(ticker):
 
     model.fit(X, y, epochs=25, batch_size=32, verbose=0)
 
-    today = datetime.today()
-    days_until_friday = (4 - today.weekday() + 7) % 7
-
     num_simulations = 1000
-    num_days = days_until_friday
+    num_days = 1
 
     last_60_days = scaled_data[-lookback:]
     X_test = []
@@ -211,7 +209,7 @@ def create_pdf(good_buys, predicted, news, close, ticker, stock_info, pdf):
     count = 0
     for new in news:
         if count == 5: continue
-        pdf.cell(200, 10, txt=new.get('title'), ln=True, align='L')
+        pdf.cell(200, 10, txt=re.sub(r'/^[\w\-\s]+$/', '', new.get('title')), ln=True, align='L')
 
     pdf.cell(200, 10, txt="Good Buy Weekly Options:", ln=True, align='L')
     if not good_buys.empty:
@@ -258,6 +256,7 @@ if __name__ == "__main__":
 
         create_pdf(good_buys, predicted, stock.news, S, ticker, stock.info, pdf)
 
-    pdf.output(fr'D:\Stocks\{datetime.now().year}\{datetime.now().month}\{datetime.now().day}\sp500_options_analysis.pdf')
+    today = datetime.now()
+    pdf.output(f'D:\\Stocks\\{today.year}\\{today.month}\\{today.day}\\sp500_options_analysis.pdf')
 
     print('Done')
