@@ -12,86 +12,17 @@ import ta
 import warnings
 import os
 import traceback
-import matplotlib.pyplot as plt
+from pykalman import KalmanFilter
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 warnings.filterwarnings("ignore")
-from tensorflow.keras.models import Model
+from tensorflow.keras.models import Model, Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 
-# def calculate_eod_price(ticker):
-#     data = yf.download(ticker, start='2022-01-01', progress=False)
-#     data = data[['Close']].copy()
-#
-#     # Adding technical indicators
-#     data.loc[:, 'SMA'] = ta.trend.sma_indicator(data['Close'], window=14)
-#     data.loc[:, 'EMA'] = ta.trend.ema_indicator(data['Close'], window=14)
-#     data.loc[:, 'RSI'] = ta.momentum.rsi(data['Close'], window=14)
-#
-#     # Fill NaN values
-#     data = data.bfill()  # Use bfill instead of fillna with method
-#
-#     # Scale the data
-#     scaler = MinMaxScaler(feature_range=(0, 1))
-#     scaled_data = scaler.fit_transform(data)
-#
-#     lookback = 60
-#     X, y = [], []
-#     for i in range(lookback, len(scaled_data)):
-#         X.append(scaled_data[i - lookback:i])
-#         y.append(scaled_data[i, 0])
-#
-#     X, y = np.array(X), np.array(y)
-#
-#     # Model creation
-#     model = Sequential()
-#     model.add(Input(shape=(X.shape[1], X.shape[2])))
-#     model.add(LSTM(units=50, return_sequences=True))
-#     model.add(Dropout(0.2))
-#     model.add(LSTM(units=50, return_sequences=True))
-#     model.add(Dropout(0.2))
-#     model.add(LSTM(units=50))
-#     model.add(Dropout(0.2))
-#     model.add(Dense(units=1))
-#     model.compile(optimizer='adam', loss='mean_squared_error')
-#
-#     model.fit(X, y, epochs=25, batch_size=32, verbose=0)
-#
-#     num_simulations = 1000
-#     num_days = 1
-#
-#     last_60_days = scaled_data[-lookback:]
-#     X_test = []
-#     X_test.append(last_60_days)
-#     X_test = np.array(X_test)
-#     X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], X_test.shape[2]))
-#
-#     simulated_prices = []
-#     for _ in tqdm(range(num_simulations), desc="Predicting Price", leave=False):
-#         simulation = []
-#         X_temp = X_test.copy()
-#
-#         for _ in range(num_days):
-#             predicted_price = model.predict(X_temp, verbose=0)
-#             predicted_price = scaler.inverse_transform(
-#                 np.concatenate((predicted_price, X_temp[0, -1, 1:].reshape(1, -1)), axis=1))[:, 0]
-#
-#             simulation.append(predicted_price[0])
-#
-#             new_test_data = np.append(X_temp[0, 1:], scaler.transform(
-#                 np.concatenate((predicted_price.reshape(1, -1), X_temp[0, -1, 1:].reshape(1, -1)), axis=1)), axis=0)
-#             X_temp = []
-#             X_temp.append(new_test_data)
-#             X_temp = np.array(X_temp)
-#             X_temp = np.reshape(X_temp, (X_temp.shape[0], X_temp.shape[1], X_temp.shape[2]))
-#
-#         simulated_prices.append(simulation)
-#
-#     simulated_prices = np.array(simulated_prices)
-#
-#     average_end_of_week_price = round(np.mean(simulated_prices[:, -1]), 2)
-#
-#     return average_end_of_week_price
+def apply_kalman_filter(data):
+    kf = KalmanFilter(initial_state_mean=0, n_dim_obs=1)
+    state_means, _ = kf.filter(data)
+    return state_means
 
 def calculate_eod_price(ticker, sp500, us10yr):
     data = yf.download(ticker, start='2022-01-01', progress=False)
@@ -101,12 +32,17 @@ def calculate_eod_price(ticker, sp500, us10yr):
     merged_data.fillna(method='ffill', inplace=True)
     merged_data.fillna(method='bfill', inplace=True)
 
-    merged_data['RSI'] = ta.momentum.RSIIndicator(close=merged_data['Close']).rsi()
-    macd = ta.trend.MACD(close=merged_data['Close'])
+    merged_data['Kalman_Close'] = apply_kalman_filter(merged_data['Close'].values)
+    merged_data['Kalman_SP500_Close'] = apply_kalman_filter(merged_data['SP500_Close'].values)
+    merged_data['Kalman_US10Yr_Close'] = apply_kalman_filter(merged_data['US10Yr_Close'].values)
+    merged_data = merged_data.drop(columns=['Close', 'SP500_Close', 'US10Yr_Close'])
+
+    merged_data['RSI'] = ta.momentum.RSIIndicator(close=merged_data['Kalman_Close']).rsi()
+    macd = ta.trend.MACD(close=merged_data['Kalman_Close'])
     merged_data['MACD'] = macd.macd()
     merged_data['MACD_Signal'] = macd.macd_signal()
     merged_data['MACD_Diff'] = macd.macd_diff()
-    bollinger = ta.volatility.BollingerBands(close=merged_data['Close'])
+    bollinger = ta.volatility.BollingerBands(close=merged_data['Kalman_Close'])
     merged_data['BB_High'] = bollinger.bollinger_hband()
     merged_data['BB_Low'] = bollinger.bollinger_lband()
     merged_data['BB_Mid'] = bollinger.bollinger_mavg()
@@ -117,7 +53,7 @@ def calculate_eod_price(ticker, sp500, us10yr):
     scaler = MinMaxScaler(feature_range=(0, 1))
     scaled_data = scaler.fit_transform(merged_data)
 
-    close_prices = merged_data['Close'].values.reshape(-1, 1)
+    close_prices = merged_data['Kalman_Close'].values.reshape(-1, 1)
     price_scaler = MinMaxScaler(feature_range=(0, 1))
     price_scaler.fit(close_prices)
 
@@ -125,7 +61,7 @@ def calculate_eod_price(ticker, sp500, us10yr):
         X, y = [], []
         for i in range(len(data) - time_step - 1):
             X.append(data[i:(i + time_step)])
-            y.append(data[i + time_step, 3])  # Assuming the target is the 4th column (Close price)
+            y.append(data[i + time_step, 6])
         return np.array(X), np.array(y)
 
     time_step = 60
@@ -133,36 +69,42 @@ def calculate_eod_price(ticker, sp500, us10yr):
 
     inputs = Input(shape=(time_step, X.shape[2]))
     x = LSTM(units=50, return_sequences=True)(inputs)
-    x = Dropout(0.2)(x)
+    x = Dropout(0.2)(x, training=True)
     x = LSTM(units=50, return_sequences=False)(x)
-    x = Dropout(0.2)(x)
+    x = Dropout(0.2)(x, training=True)
     x = Dense(units=25)(x)
     outputs = Dense(units=1)(x)
     model = Model(inputs, outputs)
     model.compile(optimizer='adam', loss='mean_squared_error')
-    model.fit(X, y, batch_size=1, epochs=1)
+    model.fit(X, y, batch_size=1, epochs=1, verbose=0)
+
     last_60_days = scaled_data[-60:]
     X_input = last_60_days.reshape(1, -1)
     X_input = X_input.reshape((1, time_step, X.shape[2]))
 
-    predicted_price = model.predict(X_input, verbose=0)
-    predicted_price = price_scaler.inverse_transform(predicted_price)
+    num_simulations = 1000
+    predicted_prices = []
+    for _ in tqdm(range(num_simulations), desc="Modeling Prices", leave=False):
+        predicted_price = model(X_input, training=True)  # Ensure dropout is active during prediction
+        predicted_price = price_scaler.inverse_transform(predicted_price.numpy())
+        predicted_prices.append(predicted_price[0, 0])
 
-    merged_data['Returns'] = merged_data['Close'].pct_change()
+    predicted_prices = np.array(predicted_prices)
+
+    mean_predicted_price = np.mean(predicted_prices)
+    std_predicted_price = np.std(predicted_prices)
+
+    merged_data['Returns'] = merged_data['Kalman_Close'].pct_change()
 
     mean_return = merged_data['Returns'].mean()
     volatility = merged_data['Returns'].std()
-
-    num_simulations = 1000
-    num_days = 1
-
     simulation_results = np.zeros(num_simulations)
 
-    for i in range(num_simulations):
-        price = predicted_price[0][0]
-        for _ in range(num_days):
+    for i in tqdm(range(num_simulations), desc="Geometric Brownian Motion Model", leave=False):
+        price = mean_predicted_price
+        for _ in range(10):  # Number of days to simulate into the future
             daily_return = np.random.normal(mean_return, volatility)
-            price = price * (1 + daily_return)
+            price *= (1 + daily_return)
         simulation_results[i] = price
 
     mean_simulated_price = np.mean(simulation_results)
@@ -170,7 +112,6 @@ def calculate_eod_price(ticker, sp500, us10yr):
     confidence_interval = np.percentile(simulation_results, [2.5, 97.5])
 
     return mean_simulated_price
-
 
 def calculate_moving_averages(data, short_window, long_window):
     data['Short_MA'] = data['Adj Close'].rolling(window=short_window, min_periods=1).mean()
@@ -333,17 +274,17 @@ if __name__ == "__main__":
                 weekly_options = filter_weekly_options(options)
                 if weekly_options.empty:
                     break
-                predicted = calculate_eod_price(ticker, sp500, us10yr)
-                option_type = 'call' if predicted > stock.history(period='1d')['Close'].iloc[-1] else 'put'
+                mean_simulated_price = calculate_eod_price(ticker, sp500, us10yr)
+                option_type = 'call' if mean_simulated_price > stock.history(period='1d')['Close'].iloc[-1] else 'put'
                 S = stock.history(period='1d')['Close'].iloc[-1]
                 r = get_risk_free_rate()
                 sigma = calculate_historical_volatility(ticker)
-                results = analyze_options(weekly_options, S, r, sigma, 1000, 10000, predicted)
+                results = analyze_options(weekly_options, S, r, sigma, 1000, 10000, mean_simulated_price)
 
                 good_buys = results[results['type'] == option_type]
                 good_buys = good_buys[good_buys['goodBuy']]
 
-                create_pdf(good_buys, predicted, stock.news, S, ticker, stock.info, pdf)
+                create_pdf(good_buys, mean_simulated_price, stock.news, S, ticker, stock.info, pdf)
             except Exception:
                 print(f'Error with {ticker}')
                 print(traceback.format_exc())
