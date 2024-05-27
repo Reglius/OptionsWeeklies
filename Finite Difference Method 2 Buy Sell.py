@@ -151,9 +151,9 @@ def calculate_buying_decision(data):
         return 'put'
 
 def get_risk_free_rate():
-    data = yf.download("^IRX", period="1d", progress=False)
-    risk_free_rate = data['Close'].iloc[-1] / 100
-    return risk_free_rate
+    # data = yf.download("^IRX", period="1d", progress=False)
+    # risk_free_rate = data['Close'].iloc[-1] / 100
+    return .045
 
 def fetch_option_data(ticker):
     stock = yf.Ticker(ticker)
