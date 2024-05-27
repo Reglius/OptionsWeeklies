@@ -19,6 +19,29 @@ warnings.filterwarnings("ignore")
 from tensorflow.keras.models import Model, Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 
+
+def moving_average_crossover_strategy(stock, short_window, long_window):
+    data = stock.history(period='1y')
+    signals = pd.DataFrame(index=data.index)
+    signals['price'] = data['Close']
+    signals['short_mavg'] = data['Close'].rolling(window=short_window, min_periods=1, center=False).mean()
+    signals['long_mavg'] = data['Close'].rolling(window=long_window, min_periods=1, center=False).mean()
+    signals['signal'] = 0.0
+    signals['signal'][short_window:] = np.where(
+        signals['short_mavg'][short_window:] > signals['long_mavg'][short_window:], 1.0, 0.0)
+    signals['positions'] = signals['signal'].diff()
+    signals['action'] = np.where(signals['positions'] == 1.0, 'buy', np.where(signals['positions'] == -1.0, 'sell', 'hold'))
+
+    return signals['action'].iloc[-1]
+
+def analyze_recommendations(stock):
+    evaluation = 0
+    evaluation = evaluation + (stock.get_recommendations().strongBuy.values[0] * 3)
+    evaluation = evaluation + (stock.get_recommendations().buy.values[0] * 1)
+    evaluation = evaluation + (stock.get_recommendations().sell.values[0] * -1)
+    evaluation = evaluation + (stock.get_recommendations().strongSell.values[0] * -3)
+    return 'buy' if evaluation >= 0 else 'sell'
+
 def apply_kalman_filter(data):
     kf = KalmanFilter(initial_state_mean=0, n_dim_obs=1)
     state_means, _ = kf.filter(data)
@@ -107,7 +130,7 @@ def calculate_eod_price(ticker, sp500, us10yr):
             price *= (1 + daily_return)
         simulation_results[i] = price
 
-    mean_simulated_price = np.mean(simulation_results)
+    mean_simulated_price = round(np.mean(simulation_results), 2)
     median_simulated_price = np.median(simulation_results)
     confidence_interval = np.percentile(simulation_results, [2.5, 97.5])
 
@@ -220,12 +243,14 @@ def buy_option(ticker):
         return True
     return False
 
-def create_pdf(good_buys, predicted, news, close, ticker, stock_info, pdf):
+def create_pdf(signal, sentiment, good_buys, predicted, news, close, ticker, stock_info, pdf):
     pdf.add_page()
     pdf.set_font("Arial", size=12)
 
     pdf.cell(200, 10, txt=f"{ticker}: {stock_info.get('shortName')}, Current Price: ${round(close, 2)}, Predicted Price: ${predicted}", ln=True, align='C')
-    pdf.cell(200, 10, txt=f"Call or Put? {option_type}", ln=True, align='C')
+    pdf.cell(200, 10, txt=f"Signal? {signal}", ln=True, align='C')
+    pdf.cell(200, 10, txt=f"Sentiment? {sentiment}", ln=True, align='C')
+    pdf.cell(200, 10, txt=f"Pricing? {option_type}", ln=True, align='C')
 
     pdf.set_font("Arial", size=10)
     count = 0
@@ -270,6 +295,8 @@ if __name__ == "__main__":
                 stock = yf.Ticker(ticker)
                 if not (buy_option(ticker)):
                     break
+                signal = moving_average_crossover_strategy(stock, short_window=12, long_window=26)
+                sentiment = analyze_recommendations(stock)
                 options = fetch_option_data(ticker)
                 weekly_options = filter_weekly_options(options)
                 if weekly_options.empty:
@@ -284,7 +311,7 @@ if __name__ == "__main__":
                 good_buys = results[results['type'] == option_type]
                 good_buys = good_buys[good_buys['goodBuy']]
 
-                create_pdf(good_buys, mean_simulated_price, stock.news, S, ticker, stock.info, pdf)
+                create_pdf(signal, sentiment, good_buys, mean_simulated_price, stock.news, S, ticker, stock.info, pdf)
             except Exception:
                 print(f'Error with {ticker}')
                 print(traceback.format_exc())
