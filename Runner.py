@@ -1,16 +1,17 @@
 import requests
 import json
+import keyring
 
 # Replace these with your API key and secret
-client_id = 'YOUR_CLIENT_ID'
-client_secret = 'YOUR_CLIENT_SECRET'
-
+client_id = keyring.get_password("TradeStationID", "client_id")
+client_secret = keyring.get_password("TradeStationSecret", "client_secret")
+client_account = keyring.get_password("TradeStationAccount", "client_account")
 # OAuth2 token endpoint
 token_url = 'https://api.tradestation.com/v2/Security/Authorize'
 
 # API endpoints
 options_data_url = 'https://api.tradestation.com/v2/marketdata/options/lookup'
-order_url = 'https://api.tradestation.com/v2/accounts/ACCOUNT_ID/orders'  # Replace ACCOUNT_ID with your actual account ID
+order_url = f'https://api.tradestation.com/v2/accounts/{client_account}/orders'
 
 
 class TradeStationAPI:
@@ -131,7 +132,7 @@ if __name__ == '__main__':
         print(json.dumps(options_data, indent=4))
 
         # Example options trade execution
-        account_id = 'YOUR_ACCOUNT_ID'
+        account_id = client_account
         quantity = 1
         action = 'BUY'
         option_type = 'Call'  # or 'Put'
