@@ -19,7 +19,8 @@ warnings.filterwarnings("ignore")
 from tensorflow.keras.models import Model, Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 
-
+num_simulations = 1000
+num_steps = 100
 def moving_average_crossover_strategy(stock, short_window, long_window):
     data = stock.history(period='1y')
     signals = pd.DataFrame(index=data.index)
@@ -105,7 +106,6 @@ def calculate_eod_price(ticker, sp500, us10yr):
     X_input = last_60_days.reshape(1, -1)
     X_input = X_input.reshape((1, time_step, X.shape[2]))
 
-    num_simulations = 1000
     predicted_prices = []
     for _ in tqdm(range(num_simulations), desc="Modeling Prices", leave=False):
         predicted_price = model(X_input, training=True)  # Ensure dropout is active during prediction
@@ -125,9 +125,8 @@ def calculate_eod_price(ticker, sp500, us10yr):
 
     for i in tqdm(range(num_simulations), desc="Geometric Brownian Motion Model", leave=False):
         price = mean_predicted_price
-        for _ in range(10):  # Number of days to simulate into the future
-            daily_return = np.random.normal(mean_return, volatility)
-            price *= (1 + daily_return)
+        daily_return = np.random.normal(mean_return, volatility)
+        price *= (1 + daily_return)
         simulation_results[i] = price
 
     mean_simulated_price = round(np.mean(simulation_results), 2)
@@ -225,6 +224,7 @@ def analyze_options(options, S, r, sigma, steps, simulations, pred_price):
         simulated_price = round(monte_carlo_simulation(S, K, T, r, sigma, steps, simulations, option_type, pred_price), 2)
         good_buy = simulated_price > market_price
         results.append({
+            'name': row['contractSymbol'],
             'type': option_type,
             'strike': K,
             'expirationDate': row['expirationDate'],
@@ -257,13 +257,13 @@ def create_pdf(signal, sentiment, good_buys, predicted, news, close, ticker, sto
     for new in news:
         if count == 5: continue
         count = count + 1
-        pdf.cell(200, 10, txt=re.sub(r'[^A-Za-z\s]', '', new.get('title')), ln=True, align='L')
+        pdf.cell(200, 10, txt=re.sub(r'[^A-Za-z\s]', '', new.get('title')), ln=True, align='L', link=new.get('link'))
 
     pdf.cell(200, 10, txt="Good Buy Weekly Options:", ln=True, align='L')
     if not good_buys.empty:
         for index, option in good_buys.iterrows():
-            if option['marketPrice'] <= 10:
-                pdf.cell(200, 10, txt=f"Strike: {option['strike']}, Expiration: {option['expirationDate']}, Market Price: {option['marketPrice']}, Simulated Price: {option['simulatedPrice']}, Diff: {round(((option['simulatedPrice'] - option['marketPrice']) / option['simulatedPrice']) * 100)}", ln=True, align='L')
+            if (option['marketPrice'] <= 10) & (option['marketPrice'] > .05):
+                pdf.cell(200, 10, txt=f"{option['name']}: Strike: {option['strike']}, Expiration: {option['expirationDate']}, Market Price: {option['marketPrice']}, Simulated Price: {option['simulatedPrice']}, Diff: {round(((option['simulatedPrice'] - option['marketPrice']) / option['simulatedPrice']) * 100)}", ln=True, align='L')
     else:
         pdf.cell(200, 10, txt="No good buy options found.", ln=True, align='L')
 
@@ -306,7 +306,7 @@ if __name__ == "__main__":
                 S = stock.history(period='1d')['Close'].iloc[-1]
                 r = get_risk_free_rate()
                 sigma = calculate_historical_volatility(ticker)
-                results = analyze_options(weekly_options, S, r, sigma, 1000, 10000, mean_simulated_price)
+                results = analyze_options(weekly_options, S, r, sigma, num_steps, num_simulations, mean_simulated_price)
 
                 good_buys = results[results['type'] == option_type]
                 good_buys = good_buys[good_buys['goodBuy']]
