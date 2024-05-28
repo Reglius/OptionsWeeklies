@@ -187,7 +187,7 @@ def calculate_historical_volatility(ticker, period='1y'):
     volatility = log_returns.std() * np.sqrt(252)
     return volatility
 
-def monte_carlo_simulation(S, K, T, r, sigma, steps, simulations, option_type, pred_price):
+def monte_carlo_simulation(S, K, T, r, sigma, steps, simulations, option_type):
     dt = T / steps
     price_paths = np.zeros((steps + 1, simulations))
     price_paths[0] = S
@@ -195,8 +195,6 @@ def monte_carlo_simulation(S, K, T, r, sigma, steps, simulations, option_type, p
     for t in range(1, steps + 1):
         z = np.random.standard_normal(simulations)
         price_paths[t] = price_paths[t - 1] * np.exp((r - 0.5 * sigma ** 2) * dt + sigma * np.sqrt(dt) * z)
-
-    price_paths[-1] = pred_price  # Use the predicted end-of-week price for the last step
 
     if option_type == 'call':
         payoff = np.maximum(price_paths[-1] - K, 0)
@@ -214,14 +212,14 @@ def next_friday():
     next_friday_date = today + timedelta(days=days_until_friday)
     return next_friday_date
 
-def analyze_options(options, S, r, sigma, steps, simulations, pred_price):
+def analyze_options(options, S, r, sigma, steps, simulations):
     results = []
     for index, row in tqdm(options.iterrows(), total=options.shape[0], desc="Analyzing options", leave=False):
         K = row['strike']
         T = (next_friday() - pd.Timestamp.today()).days / 365.0
         option_type = row['type']
         market_price = row['lastPrice']
-        simulated_price = round(monte_carlo_simulation(S, K, T, r, sigma, steps, simulations, option_type, pred_price), 2)
+        simulated_price = round(monte_carlo_simulation(S, K, T, r, sigma, steps, simulations, option_type), 2)
         good_buy = simulated_price > market_price
         results.append({
             'name': row['contractSymbol'],
@@ -306,7 +304,7 @@ if __name__ == "__main__":
                 S = stock.history(period='1d')['Close'].iloc[-1]
                 r = get_risk_free_rate()
                 sigma = calculate_historical_volatility(ticker)
-                results = analyze_options(weekly_options, S, r, sigma, num_steps, num_simulations, mean_simulated_price)
+                results = analyze_options(weekly_options, S, r, sigma, num_steps, num_simulations)
 
                 good_buys = results[results['type'] == option_type]
                 good_buys = good_buys[good_buys['goodBuy']]
