@@ -1,7 +1,5 @@
 import requests
-import yfinance as yf
 import numpy as np
-import pandas as pd
 from bs4 import BeautifulSoup
 from fpdf import FPDF
 from sklearn.preprocessing import MinMaxScaler
@@ -18,9 +16,88 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 warnings.filterwarnings("ignore")
 from tensorflow.keras.models import Model, Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
+import yfinance as yf
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split, GridSearchCV
+import ta
 
 num_simulations = 1000
 num_steps = 100
+
+def calculate_technical_indicators(stock_data):
+    stock_data['RSI'] = ta.momentum.RSIIndicator(stock_data['Close']).rsi()
+    stock_data['EMA10'] = ta.trend.EMAIndicator(stock_data['Close'], window=10).ema_indicator()
+    stock_data['EMA50'] = ta.trend.EMAIndicator(stock_data['Close'], window=50).ema_indicator()
+    bb = ta.volatility.BollingerBands(stock_data['Close'])
+    stock_data['Upper_BB'] = bb.bollinger_hband()
+    stock_data['Middle_BB'] = bb.bollinger_mavg()
+    stock_data['Lower_BB'] = bb.bollinger_lband()
+    stock_data['ATR'] = ta.volatility.AverageTrueRange(stock_data['High'], stock_data['Low'],
+                                                       stock_data['Close']).average_true_range()
+    stock_data['VWAP'] = ta.volume.VolumeWeightedAveragePrice(stock_data['High'], stock_data['Low'],
+                                                              stock_data['Close'],
+                                                              stock_data['Volume']).volume_weighted_average_price()
+    return stock_data
+
+def predict_stock_movement(ticker):
+    data = yf.download(ticker, start='2022-01-01', progress=False)
+
+    stock_data = calculate_technical_indicators(data)
+
+    # Step 3: Prepare the data
+    stock_data['Open-Close'] = stock_data['Open'] - stock_data['Close']
+    stock_data['High-Low'] = stock_data['High'] - stock_data['Low']
+    stock_data['Price_Change'] = stock_data['Close'].pct_change()
+    stock_data['MA10'] = stock_data['Close'].rolling(window=10).mean()
+    stock_data['MA50'] = stock_data['Close'].rolling(window=50).mean()
+    stock_data['Target'] = stock_data['Close'].shift(-1) > stock_data['Close']
+    stock_data = stock_data.dropna()
+
+    # Step 4: Create features and labels
+    features = stock_data[
+        ['Open-Close', 'High-Low', 'Price_Change', 'MA10', 'MA50', 'RSI', 'EMA10', 'EMA50', 'Upper_BB', 'Middle_BB',
+         'Lower_BB', 'ATR', 'VWAP']]
+    labels = stock_data['Target']
+
+    # Step 5: Split the data into training and testing sets
+    X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
+
+    # Step 6: Hyperparameter tuning using Grid Search
+    param_grid = {
+        'n_estimators': [100, 200, 300],
+        'max_features': ['sqrt', 'log2'],
+        'max_depth': [4, 6, 8, 10],
+        'criterion': ['gini', 'entropy']
+    }
+    grid_search = GridSearchCV(estimator=RandomForestClassifier(random_state=42), param_grid=param_grid, cv=5, n_jobs=-1, verbose=0)
+    grid_search.fit(X_train, y_train)
+    best_model = grid_search.best_estimator_
+
+    latest_data = stock_data.iloc[-1]
+    next_day_features = [
+        [latest_data['Open-Close'], latest_data['High-Low'], latest_data['Price_Change'], latest_data['MA10'],
+         latest_data['MA50'], latest_data['RSI'], latest_data['EMA10'], latest_data['EMA50'], latest_data['Upper_BB'],
+         latest_data['Middle_BB'], latest_data['Lower_BB'], latest_data['ATR'], latest_data['VWAP']]]
+
+    simulation_results = []
+    for _ in tqdm(range(num_simulations), desc='Random Forest Prediction', leave=False):
+        model = RandomForestClassifier(n_estimators=best_model.n_estimators,
+                                       max_depth=best_model.max_depth,
+                                       criterion=best_model.criterion,
+                                       random_state=np.random.randint(0, 10000))
+        model.fit(X_train, y_train)
+        prediction = model.predict(next_day_features)
+        simulation_results.append(prediction[0])
+
+    up_probability = np.mean(simulation_results)
+    down_probability = 1 - up_probability
+
+    prediction = 'call' if up_probability > down_probability else 'put'
+    confidence = max(up_probability, down_probability)
+
+    return prediction
+
 def moving_average_crossover_strategy(stock, short_window, long_window):
     data = stock.history(period='1y')
     signals = pd.DataFrame(index=data.index)
@@ -41,7 +118,7 @@ def analyze_recommendations(stock):
     evaluation = evaluation + (stock.get_recommendations().buy.values[0] * 1)
     evaluation = evaluation + (stock.get_recommendations().sell.values[0] * -1)
     evaluation = evaluation + (stock.get_recommendations().strongSell.values[0] * -3)
-    return 'buy' if evaluation >= 0 else 'sell'
+    return 'call' if evaluation >= 0 else 'put'
 
 def apply_kalman_filter(data):
     kf = KalmanFilter(initial_state_mean=0, n_dim_obs=1)
@@ -241,13 +318,14 @@ def buy_option(ticker):
         return True
     return False
 
-def create_pdf(signal, sentiment, good_buys, predicted, news, close, ticker, stock_info, pdf):
+def create_pdf(signal, sentiment, random_forest, good_buys, predicted, news, close, ticker, stock_info, pdf):
     pdf.add_page()
     pdf.set_font("Arial", size=12)
 
     pdf.cell(200, 10, txt=f"{ticker}: {stock_info.get('shortName')}, Current Price: ${round(close, 2)}, Predicted Price: ${predicted}", ln=True, align='C')
     pdf.cell(200, 10, txt=f"Signal? {signal}", ln=True, align='C')
     pdf.cell(200, 10, txt=f"Sentiment? {sentiment}", ln=True, align='C')
+    pdf.cell(200, 10, txt=f"Random Forest? {random_forest}", ln=True, align='C')
     pdf.cell(200, 10, txt=f"Pricing? {option_type}", ln=True, align='C')
 
     pdf.set_font("Arial", size=10)
@@ -295,6 +373,7 @@ if __name__ == "__main__":
                     break
                 signal = moving_average_crossover_strategy(stock, short_window=12, long_window=26)
                 sentiment = analyze_recommendations(stock)
+                random_forest = predict_stock_movement(ticker)
                 options = fetch_option_data(ticker)
                 weekly_options = filter_weekly_options(options)
                 if weekly_options.empty:
@@ -309,7 +388,7 @@ if __name__ == "__main__":
                 good_buys = results[results['type'] == option_type]
                 good_buys = good_buys[good_buys['goodBuy']]
 
-                create_pdf(signal, sentiment, good_buys, mean_simulated_price, stock.news, S, ticker, stock.info, pdf)
+                create_pdf(signal, sentiment, random_forest, good_buys, mean_simulated_price, stock.news, S, ticker, stock.info, pdf)
             except Exception:
                 print(f'Error with {ticker}')
                 print(traceback.format_exc())
@@ -317,7 +396,6 @@ if __name__ == "__main__":
             else:
                 break
 
-    today = datetime.now()
-    pdf.output(f'D:\\Stocks\\{today.year}\\{today.month}\\{today.day}\\sp500_options_analysis_new.pdf')
+    pdf.output(f'D:\\Stocks\\{datetime.now().year}\\{datetime.now().month}\\{datetime.now().day}\\sp500_options_analysis_new.pdf')
 
     print('Done')
