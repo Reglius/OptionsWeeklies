@@ -22,13 +22,12 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, GridSearchCV
 import ta
 
-num_simulations = 1000
+num_simulations = 500
 num_steps = 100
 
 def calculate_technical_indicators(stock_data):
     stock_data['RSI'] = ta.momentum.RSIIndicator(stock_data['Close']).rsi()
-    stock_data['EMA10'] = ta.trend.EMAIndicator(stock_data['Close'], window=10).ema_indicator()
-    stock_data['EMA50'] = ta.trend.EMAIndicator(stock_data['Close'], window=50).ema_indicator()
+    stock_data['EMA5'] = ta.trend.EMAIndicator(stock_data['Close'], window=5).ema_indicator()
     bb = ta.volatility.BollingerBands(stock_data['Close'])
     stock_data['Upper_BB'] = bb.bollinger_hband()
     stock_data['Middle_BB'] = bb.bollinger_mavg()
@@ -38,6 +37,13 @@ def calculate_technical_indicators(stock_data):
     stock_data['VWAP'] = ta.volume.VolumeWeightedAveragePrice(stock_data['High'], stock_data['Low'],
                                                               stock_data['Close'],
                                                               stock_data['Volume']).volume_weighted_average_price()
+    stock_data['Open-Close'] = stock_data['Open'] - stock_data['Close']
+    stock_data['High-Low'] = stock_data['High'] - stock_data['Low']
+    stock_data['Price_Change'] = stock_data['Close'].pct_change()
+    stock_data['MA5'] = stock_data['Close'].rolling(window=5).mean()
+    stock_data['Target'] = stock_data['Close'].shift(-1) > stock_data['Close']
+    stock_data = stock_data.dropna()
+
     return stock_data
 
 def predict_stock_movement(ticker):
@@ -45,25 +51,13 @@ def predict_stock_movement(ticker):
 
     stock_data = calculate_technical_indicators(data)
 
-    # Step 3: Prepare the data
-    stock_data['Open-Close'] = stock_data['Open'] - stock_data['Close']
-    stock_data['High-Low'] = stock_data['High'] - stock_data['Low']
-    stock_data['Price_Change'] = stock_data['Close'].pct_change()
-    stock_data['MA10'] = stock_data['Close'].rolling(window=10).mean()
-    stock_data['MA50'] = stock_data['Close'].rolling(window=50).mean()
-    stock_data['Target'] = stock_data['Close'].shift(-1) > stock_data['Close']
-    stock_data = stock_data.dropna()
-
-    # Step 4: Create features and labels
     features = stock_data[
-        ['Open-Close', 'High-Low', 'Price_Change', 'MA10', 'MA50', 'RSI', 'EMA10', 'EMA50', 'Upper_BB', 'Middle_BB',
+        ['Open-Close', 'High-Low', 'Price_Change', 'MA5', 'RSI', 'EMA5', 'Upper_BB', 'Middle_BB',
          'Lower_BB', 'ATR', 'VWAP']]
     labels = stock_data['Target']
 
-    # Step 5: Split the data into training and testing sets
     X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
 
-    # Step 6: Hyperparameter tuning using Grid Search
     param_grid = {
         'n_estimators': [100, 200, 300],
         'max_features': ['sqrt', 'log2'],
@@ -76,13 +70,14 @@ def predict_stock_movement(ticker):
 
     latest_data = stock_data.iloc[-1]
     next_day_features = [
-        [latest_data['Open-Close'], latest_data['High-Low'], latest_data['Price_Change'], latest_data['MA10'],
-         latest_data['MA50'], latest_data['RSI'], latest_data['EMA10'], latest_data['EMA50'], latest_data['Upper_BB'],
+        [latest_data['Open-Close'], latest_data['High-Low'], latest_data['Price_Change'],
+         latest_data['MA5'], latest_data['RSI'], latest_data['EMA5'], latest_data['Upper_BB'],
          latest_data['Middle_BB'], latest_data['Lower_BB'], latest_data['ATR'], latest_data['VWAP']]]
 
     simulation_results = []
     for _ in tqdm(range(num_simulations), desc='Random Forest Prediction', leave=False):
         model = RandomForestClassifier(n_estimators=best_model.n_estimators,
+                                       max_features=best_model.max_features,
                                        max_depth=best_model.max_depth,
                                        criterion=best_model.criterion,
                                        random_state=np.random.randint(0, 10000))
@@ -96,7 +91,7 @@ def predict_stock_movement(ticker):
     prediction = 'call' if up_probability > down_probability else 'put'
     confidence = max(up_probability, down_probability)
 
-    return prediction
+    return prediction, confidence
 
 def moving_average_crossover_strategy(stock, short_window, long_window):
     data = stock.history(period='1y')
@@ -108,7 +103,7 @@ def moving_average_crossover_strategy(stock, short_window, long_window):
     signals['signal'][short_window:] = np.where(
         signals['short_mavg'][short_window:] > signals['long_mavg'][short_window:], 1.0, 0.0)
     signals['positions'] = signals['signal'].diff()
-    signals['action'] = np.where(signals['positions'] == 1.0, 'buy', np.where(signals['positions'] == -1.0, 'sell', 'hold'))
+    signals['action'] = np.where(signals['positions'] >= .5, 'buy', np.where(signals['positions'] <= -.5, 'sell', 'hold'))
 
     return signals['action'].iloc[-1]
 
@@ -318,15 +313,15 @@ def buy_option(ticker):
         return True
     return False
 
-def create_pdf(signal, sentiment, random_forest, good_buys, predicted, news, close, ticker, stock_info, pdf):
+def create_pdf(option_type, good_buys, news, S, ticker, stock_info, pdf):
     pdf.add_page()
     pdf.set_font("Arial", size=12)
 
-    pdf.cell(200, 10, txt=f"{ticker}: {stock_info.get('shortName')}, Current Price: ${round(close, 2)}, Predicted Price: ${predicted}", ln=True, align='C')
-    pdf.cell(200, 10, txt=f"Signal? {signal}", ln=True, align='C')
-    pdf.cell(200, 10, txt=f"Sentiment? {sentiment}", ln=True, align='C')
-    pdf.cell(200, 10, txt=f"Random Forest? {random_forest}", ln=True, align='C')
-    pdf.cell(200, 10, txt=f"Pricing? {option_type}", ln=True, align='C')
+    pdf.cell(200, 10, txt=f"{ticker}: {stock_info.get('shortName')}", ln=True, align='C')
+    # pdf.cell(200, 10, txt=f"Signal? {signal}", ln=True, align='C')
+    # pdf.cell(200, 10, txt=f"Sentiment? {sentiment}", ln=True, align='C')
+    pdf.cell(200, 10, txt=f"Random Forest? {option_type}", ln=True, align='C')
+    # pdf.cell(200, 10, txt=f"Pricing? {option_type}", ln=True, align='C')
 
     pdf.set_font("Arial", size=10)
     count = 0
@@ -369,26 +364,26 @@ if __name__ == "__main__":
             try:
                 ticker = ticker.replace('.', '-')
                 stock = yf.Ticker(ticker)
-                if not (buy_option(ticker)):
+                S = stock.history(period='1d')['Close'].iloc[-1]
+                r = get_risk_free_rate()
+                option_type, confidence = predict_stock_movement(ticker)
+                if confidence < 0.5:
                     break
-                signal = moving_average_crossover_strategy(stock, short_window=12, long_window=26)
-                sentiment = analyze_recommendations(stock)
-                random_forest = predict_stock_movement(ticker)
+                # signal = moving_average_crossover_strategy(stock, short_window=12, long_window=26)
+                # sentiment = analyze_recommendations(stock)
                 options = fetch_option_data(ticker)
                 weekly_options = filter_weekly_options(options)
                 if weekly_options.empty:
                     break
-                mean_simulated_price = calculate_eod_price(ticker, sp500, us10yr)
-                option_type = 'call' if mean_simulated_price > stock.history(period='1d')['Close'].iloc[-1] else 'put'
-                S = stock.history(period='1d')['Close'].iloc[-1]
-                r = get_risk_free_rate()
+                # mean_simulated_price = calculate_eod_price(ticker, sp500, us10yr)
+                # option_type = 'call' if mean_simulated_price > stock.history(period='1d')['Close'].iloc[-1] else 'put'
                 sigma = calculate_historical_volatility(ticker)
                 results = analyze_options(weekly_options, S, r, sigma, num_steps, num_simulations)
 
                 good_buys = results[results['type'] == option_type]
                 good_buys = good_buys[good_buys['goodBuy']]
 
-                create_pdf(signal, sentiment, random_forest, good_buys, mean_simulated_price, stock.news, S, ticker, stock.info, pdf)
+                create_pdf(option_type, good_buys, stock.news, S, ticker, stock.info, pdf)
             except Exception:
                 print(f'Error with {ticker}')
                 print(traceback.format_exc())
