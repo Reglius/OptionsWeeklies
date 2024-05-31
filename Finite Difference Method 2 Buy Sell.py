@@ -94,7 +94,7 @@ def predict_stock_movement(ticker):
     return prediction, confidence
 
 def moving_average_crossover_strategy(stock, short_window, long_window):
-    data = stock.history(period='1y')
+    data = stock.history()
     signals = pd.DataFrame(index=data.index)
     signals['price'] = data['Close']
     signals['short_mavg'] = data['Close'].rolling(window=short_window, min_periods=1, center=False).mean()
@@ -252,9 +252,9 @@ def filter_weekly_options(options):
                              (pd.to_datetime(options['expirationDate']) <= next_week)]
     return weekly_options
 
-def calculate_historical_volatility(ticker, period='1y'):
+def calculate_historical_volatility(ticker):
     stock = yf.Ticker(ticker)
-    hist = stock.history(period=period)
+    hist = stock.history()
     log_returns = np.log(hist['Close'] / hist['Close'].shift(1)).dropna()
     volatility = log_returns.std() * np.sqrt(252)
     return volatility
