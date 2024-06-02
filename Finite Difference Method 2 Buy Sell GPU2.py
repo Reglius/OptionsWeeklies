@@ -2,23 +2,20 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import ta
+from bs4 import BeautifulSoup
 from fastai.tabular.all import *
 import torch
 from datetime import datetime, timedelta
-from tqdm import tqdm
+import matplotlib.pyplot as plt
+from arch import arch_model
 from fpdf import FPDF
-import requests
-from bs4 import BeautifulSoup
-import re
-import os
-import traceback
+from tqdm import tqdm
 
 
 def fetch_data(ticker, period='1y'):
     """Fetch historical stock data for a given ticker and period."""
     stock = yf.Ticker(ticker)
     return stock.history(period=period)
-
 
 def prepare_data(df):
     """Prepare data for model training by adding target and up columns."""
@@ -28,14 +25,12 @@ def prepare_data(df):
     df.drop(columns=['Next_Close'], inplace=True)
     return df
 
-
 def create_features(df):
     """Create features for model training."""
     df['Open-Close'] = df['Open'] - df['Close']
     df['High-Low'] = df['High'] - df['Low']
     df['Volume'] = df['Volume']
     return df[['Open-Close', 'High-Low', 'Volume']]
-
 
 def calculate_technical_indicators(stock_data):
     """Calculate technical indicators for stock data."""
@@ -51,9 +46,8 @@ def calculate_technical_indicators(stock_data):
     stock_data['High-Low'] = stock_data['High'] - stock_data['Low']
     stock_data['Price_Change'] = stock_data['Close'].pct_change()
     stock_data['MA5'] = stock_data['Close'].rolling(window=5).mean()
-    stock_data['Target'] = stock_data['Close'].shift(-1) > stock_data['Close']
+    stock_data['Target'] = (stock_data['Close'].shift(-1) > stock_data['Close']).astype(int)
     return stock_data.dropna()
-
 
 def load_model_and_data(ticker):
     """Load model and prepare data for training."""
@@ -76,11 +70,11 @@ def load_model_and_data(ticker):
     learn.fit_one_cycle(5)
     return learn
 
-
 def predict_single_day(learn, ticker):
     """Predict the stock movement for a single day."""
-    predict_df = fetch_data(ticker, period='5d').iloc[[-1]]
+    predict_df = fetch_data(ticker, period='1mo')
     predict_df = create_features(predict_df)
+    predict_df = predict_df.iloc[[-1]]
 
     dl = learn.dls.test_dl(predict_df, with_labels=False)
     predictions, _ = learn.get_preds(dl=dl)
@@ -91,36 +85,6 @@ def predict_single_day(learn, ticker):
     confidence = max_probs[0].item()
 
     return predicted_direction, confidence
-
-
-def calculate_normal_params(ticker):
-    """Calculate mean and standard deviation of daily returns."""
-    stock = yf.Ticker(ticker)
-    historical_data = stock.history(period='1y')
-    daily_changes = historical_data['Close'].pct_change().dropna()
-
-    mean_change = daily_changes.mean()
-    std_dev_change = daily_changes.std()
-
-    return mean_change, std_dev_change
-
-
-def monte_carlo_simulation_stock(ticker, initial_price, num_simulations=1000):
-    """Run Monte Carlo simulation for stock price."""
-    learn = load_model_and_data(ticker)
-    mean_change, std_dev_change = calculate_normal_params(ticker)
-    final_prices = []
-
-    for _ in range(num_simulations):
-        direction, confidence = predict_single_day(learn, ticker)
-        change_percent = np.random.normal(mean_change, std_dev_change)
-        if direction == "down":
-            change_percent = -change_percent
-
-        new_price = initial_price * (1 + change_percent)
-        final_prices.append(new_price)
-
-    return final_prices
 
 
 def monte_carlo_simulation_option(S, K, T, r, sigma, steps, simulations, option_type):
@@ -241,13 +205,73 @@ def calculate_historical_volatility(ticker):
     log_returns = np.log(hist['Close'] / hist['Close'].shift(1)).dropna()
     return log_returns.std() * np.sqrt(252)
 
+def calcuate_price(data):
+    returns = data['Adj Close'].pct_change().dropna()
+
+    # Rescale returns
+    returns_rescaled = returns * 100
+
+    # Fit a GARCH(1,1) model on rescaled returns
+    model = arch_model(returns_rescaled, vol='Garch', p=1, q=1)
+    garch_fit = model.fit(disp='off')
+
+    # Extract parameters
+    alpha0 = garch_fit.params['omega']
+    alpha1 = garch_fit.params['alpha[1]']
+    beta1 = garch_fit.params['beta[1]']
+    mu = garch_fit.params['mu'] if 'mu' in garch_fit.params else 0
+
+    # Placeholder for your ML model
+    learn = load_model_and_data(ticker)
+
+    # Predict the next day's stock movement
+    predicted_direction, confidence = predict_single_day(learn, ticker)
+
+    # Current price
+    current_price = data['Adj Close'].iloc[-1]  # Last closing price
+
+    # Number of simulations and days
+    num_simulations = 10000
+    num_days = 1  # Only predicting the next day
+
+    # Generate random innovations
+    random_innovations = np.random.normal(size=(num_simulations, num_days))
+
+    # Simulate future returns and prices
+    simulated_returns = np.zeros((num_simulations, num_days))
+    simulated_prices = np.zeros((num_simulations, num_days + 1))
+    simulated_prices[:, 0] = current_price
+
+    # Adjust confidence to a reasonable scale for return impact
+    confidence_factor = 0.01  # Adjust this factor based on your model's output range
+
+    for i in range(num_simulations):
+        sigma_t = np.std(returns)  # Starting volatility
+        for t in range(num_days):
+            epsilon_t = random_innovations[i, t]
+            sigma_t = np.sqrt(alpha0 + alpha1 * epsilon_t ** 2 + beta1 * sigma_t ** 2)
+
+            # Adjust predicted return based on the direction and confidence
+            if predicted_direction == "up":
+                adjusted_return = mu + confidence * confidence_factor
+            else:
+                adjusted_return = mu - confidence * confidence_factor
+
+            simulated_returns[i, t] = adjusted_return + sigma_t * epsilon_t
+            simulated_prices[i, t + 1] = simulated_prices[i, t] * (1 + simulated_returns[i, t])
+
+    # Calculate statistics of simulated prices
+    mean_simulated_price = np.mean(simulated_prices[:, -1])
+    std_simulated_price = np.std(simulated_prices[:, -1])
+
+    return mean_simulated_price
 
 def create_pdf(option_type_mc, option_type_ma, good_buys, news, S, ticker, stock_info, pdf):
     """Create a PDF report with the analysis results."""
     pdf.add_page()
     pdf.set_font("Arial", size=12)
     pdf.cell(200, 10, txt=f"{ticker}: {stock_info.get('shortName')}", ln=True, align='C')
-    # pdf.cell(200, 10, txt=f"Option Type Monte Carlo: {option_type_mc}", ln=True, align='C')
+    pdf.cell(200, 10, txt=f"Option Type Monte Carlo: {option_type_mc}", ln=True, align='C')
     pdf.cell(200, 10, txt=f"Option Type Moving Average: {option_type_ma}", ln=True, align='C')
 
     pdf.set_font("Arial", size=10)
@@ -295,9 +319,9 @@ if __name__ == "__main__":
                 ma_decision, option_type_ma = buy_option(ticker)
                 if not ma_decision:
                     break
-                # final_prices = monte_carlo_simulation_stock(ticker, S)
-                # option_type_mc = 'call' if np.mean(final_prices) > stock.history(period='1d')['Close'].iloc[-1] else 'put'
-                option_type_mc = 'disabled'
+                data = yf.download(ticker, start='2022-01-01')
+                final_prices = calcuate_price(data)
+                option_type_mc = 'call' if final_prices > stock.history(period='1d')['Close'].iloc[-1] else 'put'
                 options = fetch_option_data(ticker)
                 weekly_options = filter_weekly_options(options)
                 if weekly_options.empty:
