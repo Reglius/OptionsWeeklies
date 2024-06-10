@@ -18,6 +18,9 @@ import sys
 import contextlib
 from io import StringIO
 
+num_simulations = 10000
+steps=252
+
 @contextlib.contextmanager
 def suppress_stdout():
     with open(os.devnull, 'w') as devnull:
@@ -97,13 +100,13 @@ def predict_single_day(learn, ticker):
 
     return predicted_direction, confidence
 
-def monte_carlo_simulation_option(S, K, T, r, sigma, steps, simulations, option_type):
+def monte_carlo_simulation_option(S, K, T, r, sigma, option_type):
     dt = T / steps
-    price_paths = np.zeros((steps + 1, simulations))
+    price_paths = np.zeros((steps + 1, num_simulations))
     price_paths[0] = S
 
     for t in tqdm(range(1, steps + 1), desc="Geometric Brownian Motion Formula", leave=False):
-        z = np.random.standard_normal(simulations)
+        z = np.random.standard_normal(num_simulations)
         price_paths[t] = price_paths[t - 1] * np.exp((r - 0.5 * sigma ** 2) * dt + sigma * np.sqrt(dt) * z)
 
     if option_type == 'call':
@@ -147,7 +150,7 @@ def next_friday():
         days_until_friday = 7
     return today + timedelta(days=days_until_friday)
 
-def analyze_options(options, S, r, sigma, steps, simulations):
+def analyze_options(options, S, r, sigma):
     results = []
 
     for index, row in tqdm(options.iterrows(), total=options.shape[0], desc="Analyzing options", leave=False):
@@ -155,7 +158,7 @@ def analyze_options(options, S, r, sigma, steps, simulations):
         T = (next_friday() - pd.Timestamp.today()).days / 365.0
         option_type = row['type']
         market_price = row['lastPrice']
-        simulated_price = round(monte_carlo_simulation_option(S, K, T, r, sigma, steps, simulations, option_type), 2)
+        simulated_price = round(monte_carlo_simulation_option(S, K, T, r, sigma, option_type), 2)
         good_buy = simulated_price > market_price
         results.append({
             'name': row['contractSymbol'],
@@ -211,7 +214,6 @@ def calcuate_price(data):
 
     current_price = data['Adj Close'].iloc[-1]
 
-    num_simulations = 10000
     num_days = 1
 
     random_innovations = np.random.normal(size=(num_simulations, num_days))
@@ -223,11 +225,12 @@ def calcuate_price(data):
 
     for i in tqdm(range(num_simulations), desc="Monte Carlo Price", leave=False):
         sigma_t = np.std(returns)
-        epsilon_t = random_innovations[i, num_days]
-        sigma_t = np.sqrt(alpha0 + alpha1 * epsilon_t ** 2 + beta1 * sigma_t ** 2)
-        adjusted_return = mu + confidence * confidence_factor if predicted_direction == "up" else mu - confidence * confidence_factor
-        simulated_returns[i, num_days] = adjusted_return + sigma_t * epsilon_t
-        simulated_prices[i, num_days + 1] = simulated_prices[i, num_days] * (1 + simulated_returns[i, num_days])
+        for t in range(num_days):
+            epsilon_t = random_innovations[i, t]
+            sigma_t = np.sqrt(alpha0 + alpha1 * epsilon_t ** 2 + beta1 * sigma_t ** 2)
+            adjusted_return = mu + confidence * confidence_factor if predicted_direction == "up" else mu - confidence * confidence_factor
+            simulated_returns[i, t] = adjusted_return + sigma_t * epsilon_t
+            simulated_prices[i, t + 1] = simulated_prices[i, t] * (1 + simulated_returns[i, t])
 
     mean_simulated_price = np.mean(simulated_prices[:, -1])
     return mean_simulated_price
@@ -286,7 +289,7 @@ if __name__ == "__main__":
                 if weekly_options.empty:
                     break
                 sigma = calculate_historical_volatility(ticker)
-                results = analyze_options(weekly_options, S, r, sigma, steps=252, simulations=1000)
+                results = analyze_options(weekly_options, S, r, sigma)
                 good_buys = results[results['type'] == option_type_ma]
                 good_buys = good_buys[good_buys['goodBuy']]
                 create_pdf(option_type_mc, option_type_ma, good_buys, stock.news, S, ticker, stock.info, pdf)
