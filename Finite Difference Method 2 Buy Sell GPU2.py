@@ -13,14 +13,26 @@ import matplotlib.pyplot as plt
 from arch import arch_model
 from fpdf import FPDF
 from tqdm import tqdm
+import logging
+import sys
+import contextlib
+from io import StringIO
+
+@contextlib.contextmanager
+def suppress_stdout():
+    with open(os.devnull, 'w') as devnull:
+        old_stdout = sys.stdout
+        sys.stdout = devnull
+        try:
+            yield
+        finally:
+            sys.stdout = old_stdout
 
 def fetch_data(ticker, period='1y'):
-    """Fetch historical stock data for a given ticker and period."""
     stock = yf.Ticker(ticker)
     return stock.history(period=period)
 
 def prepare_data(df):
-    """Prepare data for model training by adding target and up columns."""
     df['Next_Close'] = df['Close'].shift(-1)
     df.dropna(inplace=True)
     df['Up'] = (df['Next_Close'] > df['Close']).astype(int)
@@ -28,13 +40,11 @@ def prepare_data(df):
     return df
 
 def create_features(df):
-    """Create features for model training."""
     df['Open-Close'] = df['Open'] - df['Close']
     df['High-Low'] = df['High'] - df['Low']
     return df[['Open-Close', 'High-Low', 'Volume']]
 
 def calculate_technical_indicators(stock_data):
-    """Calculate technical indicators for stock data."""
     stock_data['RSI'] = ta.momentum.RSIIndicator(stock_data['Close']).rsi()
     stock_data['EMA5'] = ta.trend.EMAIndicator(stock_data['Close'], window=5).ema_indicator()
     bb = ta.volatility.BollingerBands(stock_data['Close'])
@@ -51,7 +61,6 @@ def calculate_technical_indicators(stock_data):
     return stock_data.dropna()
 
 def load_model_and_data(ticker):
-    """Load model and prepare data for training."""
     df = fetch_data(ticker)
     df = prepare_data(df)
     df = calculate_technical_indicators(df)
@@ -64,15 +73,16 @@ def load_model_and_data(ticker):
 
     if torch.cuda.is_available():
         learn.to_fp16()
-        print("Using GPU for training")
-    else:
-        print("Using CPU for training")
+        # print("Using GPU for training")
+    # else:
+    #     print("Using CPU for training")
 
-    learn.fit_one_cycle(5)
+    with suppress_stdout():
+        learn.fit_one_cycle(5)
+
     return learn
 
 def predict_single_day(learn, ticker):
-    """Predict the stock movement for a single day."""
     predict_df = fetch_data(ticker, period='1mo')
     predict_df = create_features(predict_df)
     predict_df = predict_df.iloc[[-1]]
@@ -88,12 +98,11 @@ def predict_single_day(learn, ticker):
     return predicted_direction, confidence
 
 def monte_carlo_simulation_option(S, K, T, r, sigma, steps, simulations, option_type):
-    """Run Monte Carlo simulation for option pricing."""
     dt = T / steps
     price_paths = np.zeros((steps + 1, simulations))
     price_paths[0] = S
 
-    for t in range(1, steps + 1):
+    for t in tqdm(range(1, steps + 1), desc="Geometric Brownian Motion Formula", leave=False):
         z = np.random.standard_normal(simulations)
         price_paths[t] = price_paths[t - 1] * np.exp((r - 0.5 * sigma ** 2) * dt + sigma * np.sqrt(dt) * z)
 
@@ -106,11 +115,9 @@ def monte_carlo_simulation_option(S, K, T, r, sigma, steps, simulations, option_
     return option_price
 
 def get_risk_free_rate():
-    """Get the current risk-free rate."""
     return 0.045
 
 def fetch_option_data(ticker):
-    """Fetch option data for a given ticker."""
     stock = yf.Ticker(ticker)
     options_dates = stock.options
     option_data = []
@@ -129,13 +136,11 @@ def fetch_option_data(ticker):
     return pd.concat(option_data, axis=0)
 
 def filter_weekly_options(options):
-    """Filter options that expire within the next week."""
     today = pd.Timestamp.today()
     next_week = today + pd.Timedelta(days=7)
     return options[(pd.to_datetime(options['expirationDate']) >= today) & (pd.to_datetime(options['expirationDate']) <= next_week)]
 
 def next_friday():
-    """Get the date of the next Friday."""
     today = datetime.today()
     days_until_friday = (4 - today.weekday() + 7) % 7
     if days_until_friday == 0:
@@ -143,7 +148,6 @@ def next_friday():
     return today + timedelta(days=days_until_friday)
 
 def analyze_options(options, S, r, sigma, steps, simulations):
-    """Analyze options to determine if they are good buys."""
     results = []
 
     for index, row in tqdm(options.iterrows(), total=options.shape[0], desc="Analyzing options", leave=False):
@@ -166,13 +170,11 @@ def analyze_options(options, S, r, sigma, steps, simulations):
     return pd.DataFrame(results)
 
 def calculate_moving_averages(data, windows):
-    """Calculate moving averages for the given windows."""
     for window in windows:
         data[f'SMA_{window}'] = data['Close'].rolling(window=window).mean()
     return data
 
 def buy_option(ticker):
-    """Determine if it's a good time to buy an option based on 5-8-13 moving averages."""
     data = yf.download(ticker, start='2022-01-01', progress=False)
     data = calculate_moving_averages(data, windows=[5, 8, 13])
 
@@ -188,7 +190,6 @@ def buy_option(ticker):
     return False, 'nothing'
 
 def calculate_historical_volatility(ticker):
-    """Calculate historical volatility for a given ticker."""
     stock = yf.Ticker(ticker)
     hist = stock.history()
     log_returns = np.log(hist['Close'] / hist['Close'].shift(1)).dropna()
@@ -222,18 +223,16 @@ def calcuate_price(data):
 
     for i in tqdm(range(num_simulations), desc="Monte Carlo Price", leave=False):
         sigma_t = np.std(returns)
-        for t in range(num_days):
-            epsilon_t = random_innovations[i, t]
-            sigma_t = np.sqrt(alpha0 + alpha1 * epsilon_t ** 2 + beta1 * sigma_t ** 2)
-            adjusted_return = mu + confidence * confidence_factor if predicted_direction == "up" else mu - confidence * confidence_factor
-            simulated_returns[i, t] = adjusted_return + sigma_t * epsilon_t
-            simulated_prices[i, t + 1] = simulated_prices[i, t] * (1 + simulated_returns[i, t])
+        epsilon_t = random_innovations[i, num_days]
+        sigma_t = np.sqrt(alpha0 + alpha1 * epsilon_t ** 2 + beta1 * sigma_t ** 2)
+        adjusted_return = mu + confidence * confidence_factor if predicted_direction == "up" else mu - confidence * confidence_factor
+        simulated_returns[i, num_days] = adjusted_return + sigma_t * epsilon_t
+        simulated_prices[i, num_days + 1] = simulated_prices[i, num_days] * (1 + simulated_returns[i, num_days])
 
     mean_simulated_price = np.mean(simulated_prices[:, -1])
     return mean_simulated_price
 
 def create_pdf(option_type_mc, option_type_ma, good_buys, news, S, ticker, stock_info, pdf):
-    """Create a PDF report with the analysis results."""
     pdf.add_page()
     pdf.set_font("Arial", size=12)
     pdf.cell(200, 10, txt=f"{ticker}: {stock_info.get('shortName')}", ln=True, align='C')
@@ -260,7 +259,7 @@ if __name__ == "__main__":
     response = requests.get(url)
     soup = BeautifulSoup(response.content, 'html.parser')
     table = soup.find('table', {'id': 'constituents'})
-    df = pd.read_html(str(table))[0]
+    df = pd.read_html(StringIO(str(table)))[0]
     symbols = sorted(df['Symbol'].tolist())
 
     pdf = FPDF()
@@ -279,7 +278,7 @@ if __name__ == "__main__":
                 ma_decision, option_type_ma = buy_option(ticker)
                 if not ma_decision:
                     break
-                data = yf.download(ticker, start='2022-01-01')
+                data = yf.download(ticker, start='2022-01-01', progress=False)
                 final_prices = calcuate_price(data)
                 option_type_mc = 'call' if final_prices > stock.history(period='1d')['Close'].iloc[-1] else 'put'
                 options = fetch_option_data(ticker)
