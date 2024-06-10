@@ -245,7 +245,7 @@ def calcuate_price(data):
     # Adjust confidence to a reasonable scale for return impact
     confidence_factor = 0.01  # Adjust this factor based on your model's output range
 
-    for i in range(num_simulations):
+    for i in tqdm(range(num_simulations), desc="Monte Carlo Price", leave=False):
         sigma_t = np.std(returns)  # Starting volatility
         for t in range(num_days):
             epsilon_t = random_innovations[i, t]
@@ -291,11 +291,6 @@ def create_pdf(option_type_mc, option_type_ma, good_buys, news, S, ticker, stock
 
 
 if __name__ == "__main__":
-    sp500 = yf.download('^GSPC', start='2022-01-01', progress=False)
-    us10yr = yf.download('^TNX', start='2022-01-01', progress=False)
-    sp500 = sp500.rename(columns={'Close': 'SP500_Close'})
-    us10yr = us10yr.rename(columns={'Close': 'US10Yr_Close'})
-
     url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
     response = requests.get(url)
     soup = BeautifulSoup(response.content, 'html.parser')
