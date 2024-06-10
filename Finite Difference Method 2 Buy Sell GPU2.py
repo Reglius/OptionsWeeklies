@@ -1,4 +1,6 @@
 import traceback
+import os
+import re
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -11,7 +13,6 @@ import matplotlib.pyplot as plt
 from arch import arch_model
 from fpdf import FPDF
 from tqdm import tqdm
-
 
 def fetch_data(ticker, period='1y'):
     """Fetch historical stock data for a given ticker and period."""
@@ -30,7 +31,6 @@ def create_features(df):
     """Create features for model training."""
     df['Open-Close'] = df['Open'] - df['Close']
     df['High-Low'] = df['High'] - df['Low']
-    df['Volume'] = df['Volume']
     return df[['Open-Close', 'High-Low', 'Volume']]
 
 def calculate_technical_indicators(stock_data):
@@ -87,7 +87,6 @@ def predict_single_day(learn, ticker):
 
     return predicted_direction, confidence
 
-
 def monte_carlo_simulation_option(S, K, T, r, sigma, steps, simulations, option_type):
     """Run Monte Carlo simulation for option pricing."""
     dt = T / steps
@@ -106,11 +105,9 @@ def monte_carlo_simulation_option(S, K, T, r, sigma, steps, simulations, option_
     option_price = np.exp(-r * T) * np.mean(payoff)
     return option_price
 
-
 def get_risk_free_rate():
     """Get the current risk-free rate."""
     return 0.045
-
 
 def fetch_option_data(ticker):
     """Fetch option data for a given ticker."""
@@ -131,13 +128,11 @@ def fetch_option_data(ticker):
 
     return pd.concat(option_data, axis=0)
 
-
 def filter_weekly_options(options):
     """Filter options that expire within the next week."""
     today = pd.Timestamp.today()
     next_week = today + pd.Timedelta(days=7)
     return options[(pd.to_datetime(options['expirationDate']) >= today) & (pd.to_datetime(options['expirationDate']) <= next_week)]
-
 
 def next_friday():
     """Get the date of the next Friday."""
@@ -146,7 +141,6 @@ def next_friday():
     if days_until_friday == 0:
         days_until_friday = 7
     return today + timedelta(days=days_until_friday)
-
 
 def analyze_options(options, S, r, sigma, steps, simulations):
     """Analyze options to determine if they are good buys."""
@@ -171,13 +165,11 @@ def analyze_options(options, S, r, sigma, steps, simulations):
 
     return pd.DataFrame(results)
 
-
 def calculate_moving_averages(data, windows):
     """Calculate moving averages for the given windows."""
     for window in windows:
         data[f'SMA_{window}'] = data['Close'].rolling(window=window).mean()
     return data
-
 
 def buy_option(ticker):
     """Determine if it's a good time to buy an option based on 5-8-13 moving averages."""
@@ -188,16 +180,12 @@ def buy_option(ticker):
     mid_ma = data['SMA_8']
     long_ma = data['SMA_13']
 
-    # Buy signal: Short MA crosses above mid MA and mid MA crosses above long MA
     if short_ma.iloc[-1] > mid_ma.iloc[-1] > long_ma.iloc[-1] and short_ma.iloc[-2] <= mid_ma.iloc[-2]:
         return True, 'call'
-
-    # Sell signal: Short MA crosses below mid MA and mid MA crosses below long MA
     if short_ma.iloc[-1] < mid_ma.iloc[-1] < long_ma.iloc[-1] and short_ma.iloc[-2] >= mid_ma.iloc[-2]:
         return True, 'put'
 
     return False, 'nothing'
-
 
 def calculate_historical_volatility(ticker):
     """Calculate historical volatility for a given ticker."""
@@ -208,63 +196,40 @@ def calculate_historical_volatility(ticker):
 
 def calcuate_price(data):
     returns = data['Adj Close'].pct_change().dropna()
-
-    # Rescale returns
     returns_rescaled = returns * 100
-
-    # Fit a GARCH(1,1) model on rescaled returns
     model = arch_model(returns_rescaled, vol='Garch', p=1, q=1)
     garch_fit = model.fit(disp='off')
 
-    # Extract parameters
     alpha0 = garch_fit.params['omega']
     alpha1 = garch_fit.params['alpha[1]']
     beta1 = garch_fit.params['beta[1]']
     mu = garch_fit.params['mu'] if 'mu' in garch_fit.params else 0
 
-    # Placeholder for your ML model
     learn = load_model_and_data(ticker)
-
-    # Predict the next day's stock movement
     predicted_direction, confidence = predict_single_day(learn, ticker)
 
-    # Current price
-    current_price = data['Adj Close'].iloc[-1]  # Last closing price
+    current_price = data['Adj Close'].iloc[-1]
 
-    # Number of simulations and days
     num_simulations = 10000
-    num_days = 1  # Only predicting the next day
+    num_days = 1
 
-    # Generate random innovations
     random_innovations = np.random.normal(size=(num_simulations, num_days))
-
-    # Simulate future returns and prices
     simulated_returns = np.zeros((num_simulations, num_days))
     simulated_prices = np.zeros((num_simulations, num_days + 1))
     simulated_prices[:, 0] = current_price
 
-    # Adjust confidence to a reasonable scale for return impact
-    confidence_factor = 0.01  # Adjust this factor based on your model's output range
+    confidence_factor = 0.01
 
     for i in tqdm(range(num_simulations), desc="Monte Carlo Price", leave=False):
-        sigma_t = np.std(returns)  # Starting volatility
+        sigma_t = np.std(returns)
         for t in range(num_days):
             epsilon_t = random_innovations[i, t]
             sigma_t = np.sqrt(alpha0 + alpha1 * epsilon_t ** 2 + beta1 * sigma_t ** 2)
-
-            # Adjust predicted return based on the direction and confidence
-            if predicted_direction == "up":
-                adjusted_return = mu + confidence * confidence_factor
-            else:
-                adjusted_return = mu - confidence * confidence_factor
-
+            adjusted_return = mu + confidence * confidence_factor if predicted_direction == "up" else mu - confidence * confidence_factor
             simulated_returns[i, t] = adjusted_return + sigma_t * epsilon_t
             simulated_prices[i, t + 1] = simulated_prices[i, t] * (1 + simulated_returns[i, t])
 
-    # Calculate statistics of simulated prices
     mean_simulated_price = np.mean(simulated_prices[:, -1])
-    std_simulated_price = np.std(simulated_prices[:, -1])
-
     return mean_simulated_price
 
 def create_pdf(option_type_mc, option_type_ma, good_buys, news, S, ticker, stock_info, pdf):
@@ -289,7 +254,6 @@ def create_pdf(option_type_mc, option_type_ma, good_buys, news, S, ticker, stock
         pdf.cell(200, 10, txt="No good buy options found.", ln=True, align='L')
 
     pdf.cell(200, 10, ln=True)
-
 
 if __name__ == "__main__":
     url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
