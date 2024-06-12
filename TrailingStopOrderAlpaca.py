@@ -5,65 +5,76 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 import json
 import requests
 import time
+import schedule
 
 APCA_API_BASE_URL = 'https://paper-api.alpaca.markets'
-APCA_API_KEY_ID = kr.get_password("AlpacaKEY","drcook6611")
-APCA_API_SECRET_KEY = kr.get_password("AlpacaSecret","drcook6611")
+APCA_API_KEY_ID = kr.get_password("AlpacaKEY", "drcook6611")
+APCA_API_SECRET_KEY = kr.get_password("AlpacaSecret", "drcook6611")
 
 trading_client = TradingClient(APCA_API_KEY_ID, APCA_API_SECRET_KEY)
 account = trading_client.get_account()
 
-if account.trading_blocked:
-    print('Account is currently restricted from trading.')
-print('${} is available as buying power.'.format(account.buying_power))
+def runner():
+    if account.trading_blocked:
+        print('Account is currently restricted from trading.')
+        return
 
-symbol = 'AAL240614P00011500'
+    print('${} is available as buying power.'.format(account.buying_power))
 
-limit_order_data = LimitOrderRequest(
-    symbol=symbol,
-    qty=1,
-    side=OrderSide.BUY,
-    time_in_force=TimeInForce.DAY,
-    limit_price=29,
-)
+    symbol = 'AAL240614P00011500'
 
-# Limit order
-limit_order = trading_client.submit_order(
-    order_data=limit_order_data
-)
+    limit_order_data = LimitOrderRequest(
+        symbol=symbol,
+        qty=1,
+        side=OrderSide.BUY,
+        time_in_force=TimeInForce.DAY,
+        limit_price=29,
+    )
 
-price = limit_order.filled_avg_price
-if price == None:
-    price = 0.25
+    # Limit order
+    limit_order = trading_client.submit_order(
+        order_data=limit_order_data
+    )
 
-while True:
-    print('Checking price...')
-    url = f"https://data.alpaca.markets/v1beta1/options/quotes/latest?symbols={symbol}&feed=indicative"
+    price = limit_order.filled_avg_price
+    if price is None:
+        price = 0.25
 
-    headers = {
-        "accept": "application/json",
-        "APCA-API-KEY-ID": APCA_API_KEY_ID,
-        "APCA-API-SECRET-KEY": APCA_API_SECRET_KEY
-    }
+    highest_price = price
 
-    response = requests.get(url, headers=headers)
+    while True:
+        url = f"https://data.alpaca.markets/v1beta1/options/quotes/latest?symbols={symbol}&feed=indicative"
 
-    current_bid = json.loads(response.content.decode('utf-8')).get('quotes').get(symbol).get('bp')
+        headers = {
+            "accept": "application/json",
+            "APCA-API-KEY-ID": APCA_API_KEY_ID,
+            "APCA-API-SECRET-KEY": APCA_API_SECRET_KEY
+        }
 
-    if ((current_bid - price) / current_bid) >= 0.15:
-        break
+        response = requests.get(url, headers=headers)
+        data = json.loads(response.content.decode('utf-8'))
+        current_bid = data.get('quotes', {}).get(symbol, {}).get('bp')
 
-    time.sleep(5)
+        if current_bid is None:
+            print("Unable to fetch current bid price.")
+            break
 
-limit_order_data = LimitOrderRequest(
-    symbol=symbol,
-    qty=1,
-    side=OrderSide.SELL,
-    time_in_force=TimeInForce.DAY,
-    limit_price=json.loads(response.content.decode('utf-8')).get('quotes').get(symbol).get('bp'),
-)
+        highest_price = max(highest_price, current_bid)
 
-# Limit order
-limit_order = trading_client.submit_order(
-    order_data=limit_order_data
-)
+        if ((highest_price - current_bid) / highest_price) >= 0.15:
+            break
+
+        print('Checking Price -', end='\r')
+        time.sleep(1)
+        print('Checking Price |', end='\r')
+        time.sleep(1)
+
+schedule.every().day.at("08:30").do(runner)
+
+if __name__ == "__main__":
+    while True:
+        schedule.run_pending()
+        print('Waiting for 08:30 -', end='\r')
+        time.sleep(1)
+        print('Waiting for 08:30 |', end='\r')
+        time.sleep(1)
