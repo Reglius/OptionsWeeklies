@@ -1,13 +1,14 @@
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from alpaca.trading.client import TradingClient
 import keyring as kr
 from alpaca.trading.requests import TrailingStopOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 import json
 import requests
-import time
 
-APCA_API_BASE_URL = 'https://paper-api.alpaca.markets'
+APCA_API_BASE_URL = 'https://api.alpaca.markets'
+# APCA_API_BASE_URL = 'https://paper-api.alpaca.markets'
 APCA_API_KEY_ID = kr.get_password("AlpacaKEYReal", "drcook6611")
 # APCA_API_KEY_ID = kr.get_password("AlpacaKEY", "drcook6611")
 APCA_API_SECRET_KEY = kr.get_password("AlpacaSecretReal", "drcook6611")
@@ -15,10 +16,6 @@ APCA_API_SECRET_KEY = kr.get_password("AlpacaSecretReal", "drcook6611")
 
 trading_client = TradingClient(APCA_API_KEY_ID, APCA_API_SECRET_KEY)
 account = trading_client.get_account()
-
-
-import time
-from datetime import datetime, timedelta
 
 def wait_until(target_time):
     """Wait until the target time (a datetime object)."""
@@ -66,7 +63,7 @@ def run_at_specific_time(hour, minute):
 
     limit_order_data = LimitOrderRequest(
         symbol=symbol,
-        qty=1,
+        qty=4,
         side=OrderSide.BUY,
         time_in_force=TimeInForce.DAY,
         limit_price=current_ask,
@@ -103,7 +100,7 @@ def run_at_specific_time(hour, minute):
         if ((highest_price - current_bid) / highest_price) >= 0.15:
             limit_order_data = LimitOrderRequest(
                 symbol=symbol,
-                qty=1,
+                qty=4,
                 side=OrderSide.SELL,
                 time_in_force=TimeInForce.DAY,
                 limit_price=current_ask,
