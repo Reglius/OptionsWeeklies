@@ -31,10 +31,8 @@ def run_at_specific_time(hour, minute):
     now = datetime.now()
     target_time = datetime(now.year, now.month, now.day, hour, minute)
 
-    # Wait until the target time
     wait_until(target_time)
 
-    # Run your code
     print("It's 08:30! Running the code...")
 
     if account.trading_blocked:
@@ -69,7 +67,6 @@ def run_at_specific_time(hour, minute):
         limit_price=current_ask,
     )
 
-    # Limit order
     limit_order = trading_client.submit_order(
         order_data=limit_order_data
     )
@@ -97,7 +94,7 @@ def run_at_specific_time(hour, minute):
 
         highest_price = max(highest_price, current_bid)
 
-        if ((highest_price - current_bid) / highest_price) >= 0.15:
+        if ((current_bid - highest_price) / current_bid) <= -0.15:
             limit_order_data = LimitOrderRequest(
                 symbol=symbol,
                 qty=4,
@@ -106,7 +103,6 @@ def run_at_specific_time(hour, minute):
                 limit_price=current_ask,
             )
 
-            # Limit order
             limit_order = trading_client.submit_order(
                 order_data=limit_order_data
             )
@@ -117,5 +113,4 @@ def run_at_specific_time(hour, minute):
         print('Checking Price |', end='\r')
         time.sleep(1)
 
-# Set the specific time to run the code (08:30)
 run_at_specific_time(8, 30)
