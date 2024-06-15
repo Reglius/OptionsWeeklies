@@ -272,6 +272,7 @@ if __name__ == "__main__":
     os.makedirs(output_dir, exist_ok=True)
 
     for ticker in tqdm(symbols, total=len(symbols), desc="Analyzing Stock"):
+        retry_counter = 0
         while True:
             try:
                 ticker = ticker.replace('.', '-')
@@ -296,6 +297,10 @@ if __name__ == "__main__":
             except Exception:
                 print(f'Error with {ticker}')
                 print(traceback.format_exc())
+                retry_counter = retry_counter + 1
+                print(f'Retry Counter: {retry_counter}')
+                if retry_counter == 5:
+                    break
                 continue
             else:
                 break

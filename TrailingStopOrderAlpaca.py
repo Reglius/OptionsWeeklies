@@ -1,5 +1,6 @@
 import time
 from datetime import datetime, timedelta
+from math import floor
 from alpaca.trading.client import TradingClient
 import keyring as kr
 from alpaca.trading.requests import TrailingStopOrderRequest, LimitOrderRequest
@@ -41,7 +42,7 @@ def run_at_specific_time(hour, minute):
 
     print('${} is available as buying power.'.format(account.buying_power))
 
-    symbol = 'BX240614C00123000'
+    symbol = 'WMT240621C00066670'
 
     url = f"https://data.alpaca.markets/v1beta1/options/quotes/latest?symbols={symbol}&feed=indicative"
 
@@ -57,11 +58,15 @@ def run_at_specific_time(hour, minute):
     current_ask = data.get('quotes', {}).get(symbol, {}).get('ap')
 
     if (current_bid - current_ask) / current_bid > .07:
+        print("Spread is too far apart.")
         exit()
+
+    purchase_price = current_ask
+    purchase_quantity = floor(account.buying_power / purchase_price)
 
     limit_order_data = LimitOrderRequest(
         symbol=symbol,
-        qty=4,
+        qty=purchase_quantity,
         side=OrderSide.BUY,
         time_in_force=TimeInForce.DAY,
         limit_price=current_ask,
@@ -97,7 +102,7 @@ def run_at_specific_time(hour, minute):
         if ((current_bid - highest_price) / current_bid) <= -0.15:
             limit_order_data = LimitOrderRequest(
                 symbol=symbol,
-                qty=4,
+                qty=purchase_quantity,
                 side=OrderSide.SELL,
                 time_in_force=TimeInForce.DAY,
                 limit_price=current_ask,
@@ -106,6 +111,7 @@ def run_at_specific_time(hour, minute):
             limit_order = trading_client.submit_order(
                 order_data=limit_order_data
             )
+            print(f'Sold {limit_order.filled_qty} {limit_order.symbol} at {limit_order.limit_price}')
             exit()
 
         print('Checking Price -', end='\r')
