@@ -15,7 +15,7 @@ APCA_API_KEY_ID = kr.get_password("AlpacaKEYReal", "drcook6611")
 APCA_API_SECRET_KEY = kr.get_password("AlpacaSecretReal", "drcook6611")
 # APCA_API_SECRET_KEY = kr.get_password("AlpacaSecret", "drcook6611")
 
-trading_client = TradingClient(APCA_API_KEY_ID, APCA_API_SECRET_KEY)
+trading_client = TradingClient(APCA_API_KEY_ID, APCA_API_SECRET_KEY, paper=False)
 account = trading_client.get_account()
 
 def wait_until(target_time):
