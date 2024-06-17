@@ -62,7 +62,7 @@ def run_at_specific_time(hour, minute):
         exit()
 
     purchase_price = current_ask
-    purchase_quantity = floor(account.buying_power / purchase_price)
+    purchase_quantity = floor(float(account.buying_power) / purchase_price)
 
     limit_order_data = LimitOrderRequest(
         symbol=symbol,
@@ -76,6 +76,7 @@ def run_at_specific_time(hour, minute):
         order_data=limit_order_data
     )
 
+    #add wait until filled to get the price
     price = limit_order.filled_avg_price
     highest_price = price
 
