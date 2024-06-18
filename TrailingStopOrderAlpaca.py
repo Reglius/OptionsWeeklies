@@ -1,22 +1,12 @@
 import time
 from datetime import datetime, timedelta
 from math import floor
-from alpaca.trading.client import TradingClient
 import keyring as kr
-from alpaca.trading.requests import TrailingStopOrderRequest, LimitOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
 import json
 import requests
 
-APCA_API_BASE_URL = 'https://api.alpaca.markets'
-# APCA_API_BASE_URL = 'https://paper-api.alpaca.markets'
-APCA_API_KEY_ID = kr.get_password("AlpacaKEYReal", "drcook6611")
-# APCA_API_KEY_ID = kr.get_password("AlpacaKEY", "drcook6611")
-APCA_API_SECRET_KEY = kr.get_password("AlpacaSecretReal", "drcook6611")
-# APCA_API_SECRET_KEY = kr.get_password("AlpacaSecret", "drcook6611")
-
-trading_client = TradingClient(APCA_API_KEY_ID, APCA_API_SECRET_KEY, paper=False)
-account = trading_client.get_account()
+TRADIER_API_TOKEN = kr.get_password("TradierAPI", "drcook6611")
+ACCOUNT_ID = kr.get_password("TradierAcct", "drcook6611")
 
 def wait_until(target_time):
     """Wait until the target time (a datetime object)."""
@@ -25,6 +15,19 @@ def wait_until(target_time):
         print('Waiting for 08:30 -', end='\r')
         time.sleep(1)
         print('Waiting for 08:30 |', end='\r')
+        time.sleep(1)
+
+def wait_until_order_filled(order_id):
+    while True:
+        response = requests.get(f"https://api.tradier.com/v1/accounts/{ACCOUNT_ID}/orders/{order_id}",
+                                headers={'Authorization': f'Bearer {TRADIER_API_TOKEN}', 'Accept': 'application/json'}
+                                )
+        order = response.json()['order']
+        if order['status'] == 'filled':
+            return float(order['avg_fill_price'])
+        print('Waiting for order to fill -', end='\r')
+        time.sleep(1)
+        print('Waiting for order to fill |', end='\r')
         time.sleep(1)
 
 def run_at_specific_time(hour, minute):
@@ -36,63 +39,61 @@ def run_at_specific_time(hour, minute):
 
     print("It's 08:30! Running the code...")
 
-    if account.trading_blocked:
-        print('Account is currently restricted from trading.')
-        return
+    # Get account buying power
+    response = requests.get(f'https://api.tradier.com/v1/accounts/{ACCOUNT_ID}/balances',
+                            params={},
+                            headers={'Authorization': f'Bearer {TRADIER_API_TOKEN}', 'Accept': 'application/json'}
+                            )
 
-    print('${} is available as buying power.'.format(account.buying_power))
+    buying_power = float(response.json()['balances']['cash']['cash_available'])
+
+    print('${} is available as buying power.'.format(buying_power))
 
     symbol = 'WMT240621C00066670'
 
-    url = f"https://data.alpaca.markets/v1beta1/options/quotes/latest?symbols={symbol}&feed=indicative"
+    response = requests.get('https://api.tradier.com/v1/markets/quotes',
+                            params={'symbols': symbol, 'greeks': 'false'},
+                            headers={'Authorization': f'Bearer {TRADIER_API_TOKEN}', 'Accept': 'application/json'}
+                            )
 
-    headers = {
-        "accept": "application/json",
-        "APCA-API-KEY-ID": APCA_API_KEY_ID,
-        "APCA-API-SECRET-KEY": APCA_API_SECRET_KEY
-    }
-
-    response = requests.get(url, headers=headers)
-    data = json.loads(response.content.decode('utf-8'))
-    current_bid = data.get('quotes', {}).get(symbol, {}).get('bp')
-    current_ask = data.get('quotes', {}).get(symbol, {}).get('ap')
+    current_bid = float(response.json()['quotes']['quote']['bid'])
+    current_ask = float(response.json()['quotes']['quote']['ask'])
 
     if (current_bid - current_ask) / current_bid > .07:
         print("Spread is too far apart.")
         exit()
 
     purchase_price = current_ask
-    purchase_quantity = floor(float(account.buying_power) / purchase_price)
+    purchase_quantity = floor(buying_power / purchase_price)
 
-    limit_order_data = LimitOrderRequest(
-        symbol=symbol,
-        qty=purchase_quantity,
-        side=OrderSide.BUY,
-        time_in_force=TimeInForce.DAY,
-        limit_price=current_ask,
-    )
+    order_data = {
+        "class": "option",
+        "symbol": symbol,
+        "duration": "day",
+        "side": "buy_to_open",
+        "quantity": purchase_quantity,
+        "type": "limit",
+        "price": purchase_price
+    }
 
-    limit_order = trading_client.submit_order(
-        order_data=limit_order_data
-    )
+    response = requests.post(f"https://api.tradier.com/v1/accounts/{ACCOUNT_ID}/orders",
+                             headers={'Authorization': f'Bearer {TRADIER_API_TOKEN}', 'Accept': 'application/json'},
+                             data=order_data
+                             )
+    order_id = response.json()['order']['id']
 
-    #add wait until filled to get the price
-    price = limit_order.filled_avg_price
-    highest_price = price
+    # Wait until the order is filled and get the filled average price
+    filled_avg_price = wait_until_order_filled(order_id)
+    highest_price = filled_avg_price
 
     while True:
-        url = f"https://data.alpaca.markets/v1beta1/options/quotes/latest?symbols={symbol}&feed=indicative"
+        response = requests.get('https://api.tradier.com/v1/markets/quotes',
+                                params={'symbols': symbol, 'greeks': 'false'},
+                                headers={'Authorization': f'Bearer {TRADIER_API_TOKEN}', 'Accept': 'application/json'}
+                                )
 
-        headers = {
-            "accept": "application/json",
-            "APCA-API-KEY-ID": APCA_API_KEY_ID,
-            "APCA-API-SECRET-KEY": APCA_API_SECRET_KEY
-        }
-
-        response = requests.get(url, headers=headers)
-        data = json.loads(response.content.decode('utf-8'))
-        current_bid = data.get('quotes', {}).get(symbol, {}).get('bp')
-        current_ask = data.get('quotes', {}).get(symbol, {}).get('ap')
+        current_bid = float(response.json()['quotes']['quote']['bid'])
+        current_ask = float(response.json()['quotes']['quote']['ask'])
 
         if current_bid is None:
             print("Unable to fetch current bid price.")
@@ -101,18 +102,23 @@ def run_at_specific_time(hour, minute):
         highest_price = max(highest_price, current_bid)
 
         if ((current_bid - highest_price) / current_bid) <= -0.15:
-            limit_order_data = LimitOrderRequest(
-                symbol=symbol,
-                qty=purchase_quantity,
-                side=OrderSide.SELL,
-                time_in_force=TimeInForce.DAY,
-                limit_price=current_ask,
-            )
+            order_data = {
+                "class": "option",
+                "symbol": symbol,
+                "duration": "day",
+                "side": "sell_to_close",
+                "quantity": purchase_quantity,
+                "type": "limit",
+                "price": current_ask
+            }
 
-            limit_order = trading_client.submit_order(
-                order_data=limit_order_data
-            )
-            print(f'Sold {limit_order.filled_qty} {limit_order.symbol} at {limit_order.limit_price}')
+            response = requests.post(f"https://api.tradier.com/v1/accounts/{ACCOUNT_ID}/orders",
+                                     headers={'Authorization': f'Bearer {TRADIER_API_TOKEN}', 'Accept': 'application/json'},
+                                     data=order_data
+                                     )
+            order_id = response.json()['order']['id']
+            sold_price = wait_until_order_filled(order_id)
+            print(f'Sold {purchase_quantity} {symbol} at {sold_price}')
             exit()
 
         print('Checking Price -', end='\r')
