@@ -49,7 +49,7 @@ def run_at_specific_time(hour, minute):
 
     print('${} is available as buying power.'.format(buying_power))
 
-    symbol = 'WMT240621C00066670'
+    symbol = 'EA240621C00137000'
 
     response = requests.get('https://api.tradier.com/v1/markets/quotes',
                             params={'symbols': symbol, 'greeks': 'false'},
